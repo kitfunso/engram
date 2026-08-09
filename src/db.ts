@@ -88,26 +88,53 @@ function requireEnv(name: string): string {
   return value;
 }
 
-function buildLocalPoolConfig(): PoolConfig {
-  // sslmode=disable lives in the URL itself; pg-connection-string parses it
-  // into ssl:false. No explicit ssl override needed for local.
-  return { connectionString: requireEnv("ENGRAM_DATABASE_URL") };
+const CLOUD_HOST_SUFFIX = ".cockroachlabs.cloud";
+
+/**
+ * Locates the CRDB Cloud CA certificate. Checked in order:
+ *  1. next to this module itself (`certs/crdb-root.crt` alongside the file) -
+ *     the shape scripts/deploy-lambda.mjs zips (bundle + certs/ sibling), so
+ *     this resolves correctly inside the Lambda runtime (/var/task/index.mjs
+ *     + /var/task/certs/crdb-root.crt) without any Lambda-specific branching.
+ *  2. the repo root's `certs/crdb-root.crt` (checked-in copy, dev machine
+ *     running from src/ via tsx - `here` is src/, so candidate 1 misses and
+ *     this repo-root candidate hits).
+ *  3. the original spike-era `%APPDATA%\postgresql\root.crt` location, as a
+ *     last-resort fallback for a dev machine that has cockroach's downloaded
+ *     cert but hasn't pulled the repo copy.
+ * The CA is public key material (CLAUDE.md rule 4 exempts it explicitly), so
+ * committing certs/crdb-root.crt to the repo is intentional, not a leak.
+ */
+function resolveCaPath(): string {
+  const candidates = [
+    path.join(here, "certs", "crdb-root.crt"),
+    path.join(repoRoot, "certs", "crdb-root.crt"),
+    path.join(process.env.APPDATA ?? "", "postgresql", "root.crt"),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error(`db: could not locate CRDB Cloud CA cert; tried ${candidates.join(", ")}`);
 }
 
-function buildCloudPoolConfig(): PoolConfig {
-  const connectionString = requireEnv("ENGRAM_CLOUD_DATABASE_URL");
-  // Parsed into discrete fields rather than passed as {connectionString, ssl}:
-  // pg's ConnectionParameters re-parses the URL's sslmode and overwrites any
-  // explicit `ssl` option with what it derives (verified by reading
-  // node_modules/pg/lib/connection-parameters.js - config.connectionString
-  // is re-parsed and Object.assign'd LAST, so it wins over an explicit ssl
-  // object). That would silently drop our CA and fail verify-full. Passing
-  // host/port/user/password/database + an explicit ssl object avoids the
-  // clash - this is the same shape scripts/spike/vector-spike.mjs used to
-  // connect successfully to CockroachDB Cloud.
+/**
+ * Builds a pg PoolConfig from a connection string. When the URL's host ends
+ * with .cockroachlabs.cloud, parses it into discrete fields and applies an
+ * explicit ssl:{ca, rejectUnauthorized:true} option instead of passing
+ * {connectionString, ssl}: pg's ConnectionParameters re-parses the URL's
+ * sslmode and overwrites any explicit `ssl` option with what it derives
+ * (verified by reading node_modules/pg/lib/connection-parameters.js -
+ * config.connectionString is re-parsed and Object.assign'd LAST, so it wins
+ * over an explicit ssl object). That would silently drop our CA and fail
+ * verify-full. Any other host (local insecure cluster) passes the connection
+ * string straight through - sslmode=disable in the URL is enough there.
+ */
+function buildPoolConfigForUrl(connectionString: string): PoolConfig {
   const url = new URL(connectionString);
-  const caPath = path.join(process.env.APPDATA ?? "", "postgresql", "root.crt");
-  const ca = fs.readFileSync(caPath, "utf8");
+  if (!url.hostname.endsWith(CLOUD_HOST_SUFFIX)) {
+    return { connectionString };
+  }
+  const ca = fs.readFileSync(resolveCaPath(), "utf8");
   return {
     host: url.hostname,
     port: url.port ? Number(url.port) : 26257,
@@ -116,6 +143,14 @@ function buildCloudPoolConfig(): PoolConfig {
     database: url.pathname.slice(1),
     ssl: { ca, rejectUnauthorized: true },
   };
+}
+
+function buildLocalPoolConfig(): PoolConfig {
+  return buildPoolConfigForUrl(requireEnv("ENGRAM_DATABASE_URL"));
+}
+
+function buildCloudPoolConfig(): PoolConfig {
+  return buildPoolConfigForUrl(requireEnv("ENGRAM_CLOUD_DATABASE_URL"));
 }
 
 let pool: PgPool | undefined;

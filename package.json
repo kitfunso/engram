@@ -16,7 +16,9 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/**/*.test.ts",
     "migrate": "tsx src/migrate.ts",
-    "mcp": "npx tsx src/mcp/server.ts"
+    "mcp": "npx tsx src/mcp/server.ts",
+    "deploy:lambda": "node scripts/deploy-lambda.mjs",
+    "seed:demo": "tsx scripts/seed-demo.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1106.0",
@@ -29,6 +31,7 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.0",
+    "esbuild": "^0.28.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }

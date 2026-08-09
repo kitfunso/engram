@@ -6,6 +6,7 @@
 // every route, and every route validates it plus the other boundary rules
 // below (CLAUDE.md Safety Rules).
 
+import fs from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,7 +38,22 @@ import {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..");
-const DASHBOARD_PATH = path.join(repoRoot, "public", "dashboard.html");
+
+// Resolves public/dashboard.html two ways, same reasoning as
+// src/db.ts's resolveCaPath: esbuild bundling collapses this file's
+// import.meta.url into the bundle's own location, so `here` stops meaning
+// "src/agent" once scripts/deploy-lambda.mjs bundles src/lambda.ts (which
+// imports this route table) into dist/lambda-package/index.mjs. The deploy
+// script copies public/dashboard.html to a `public/` sibling of that bundle,
+// so trying `here`-relative first resolves correctly in the Lambda zip
+// (/var/task/public/dashboard.html); the repoRoot-relative fallback is the
+// path that resolves when running from src/ directly (local dev, tests).
+function resolveDashboardPath(): string {
+  const candidates = [path.join(here, "public", "dashboard.html"), path.join(repoRoot, "public", "dashboard.html")];
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[candidates.length - 1];
+}
+
+const DASHBOARD_PATH = resolveDashboardPath();
 
 async function readJsonBody(c: Context): Promise<Record<string, unknown>> {
   let body: unknown;
