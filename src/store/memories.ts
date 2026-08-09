@@ -1,11 +1,17 @@
 // THE single write path to `memories` (CLAUDE.md rule 1): every mutation
 // writes a memories row and a memory_versions row in the same transaction.
 // Nothing outside src/store/** may issue SQL against these tables
-// (docs/ARCHITECTURE.md Service Boundaries).
+// (docs/ARCHITECTURE.md Service Boundaries). Other store/** modules that
+// need to mutate memories (consolidate.ts) do so by calling the tx-scoped
+// helpers exported here (insertMemoryTx, consolidateSourceTx) on their own
+// client/transaction, so the write SQL itself still lives only in this file.
 
+import { createHash } from "node:crypto";
+import type { Pool, PoolClient } from "pg";
 import { getPool } from "../db.js";
 import { newUlid } from "../ulid.js";
 import { embed } from "../embeddings.js";
+import { strengthAt } from "./decay.js";
 
 export { strengthAt } from "./decay.js";
 
@@ -37,7 +43,7 @@ export interface RememberInput {
   origin?: string;
 }
 
-interface MemoryRow {
+export interface MemoryRow {
   scope_id: string;
   memory_id: string;
   content: string;
@@ -56,21 +62,21 @@ interface MemoryRow {
 
 const DEFAULT_HALF_LIFE_DAYS = 30;
 
-const MEMORY_COLUMNS = `scope_id, memory_id, content, embedding, layer, strength, half_life_days,
+export const MEMORY_COLUMNS = `scope_id, memory_id, content, embedding, layer, strength, half_life_days,
   retrieval_count, created_at, last_retrieved_at, origin, tags, status, consolidated_into`;
 
 // CRDB VECTOR uses pgvector wire format: pass a '[0.1,0.2,...]' string with
 // an explicit ::vector cast, not a JS array (CLAUDE.md "Common Mistakes to
 // Avoid"). Verified round-trip shape against local CockroachDB directly.
-function toVectorLiteral(embedding: number[]): string {
+export function toVectorLiteral(embedding: number[]): string {
   return `[${embedding.join(",")}]`;
 }
 
-function parseVectorLiteral(literal: string): number[] {
+export function parseVectorLiteral(literal: string): number[] {
   return literal.slice(1, -1).split(",").map(Number);
 }
 
-function rowToMemory(row: MemoryRow): Memory {
+export function rowToMemory(row: MemoryRow): Memory {
   return {
     scopeId: row.scope_id,
     memoryId: row.memory_id,
@@ -95,9 +101,12 @@ function rowToMemory(row: MemoryRow): Memory {
 
 function memorySnapshot(memory: Memory): Record<string, unknown> {
   // Embedding intentionally omitted: 1024 floats duplicated into every
-  // version row is wasteful and it never changes across the ops this store
-  // writes today (insert only, in this step). Revisit if a future op
-  // mutates embedding.
+  // version row is wasteful, and no op in this store ever mutates an
+  // existing memory's embedding after insert (insertMemoryTx writes it once;
+  // reinforceMemoryTx/consolidateSourceTx never touch the column) - so
+  // timetravel.ts's replay path can always join the current
+  // memories.embedding column for a surviving memory_id and get an exact
+  // answer, not an approximation. Revisit if a future op mutates embedding.
   return {
     scopeId: memory.scopeId,
     memoryId: memory.memoryId,
@@ -115,9 +124,48 @@ function memorySnapshot(memory: Memory): Record<string, unknown> {
   };
 }
 
+async function writeVersion(client: PoolClient, scopeId: string, memoryId: string, op: string, memory: Memory): Promise<void> {
+  const versionId = newUlid();
+  await client.query(
+    `INSERT INTO memory_versions (scope_id, version_id, memory_id, op, snapshot, actor)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
+    [scopeId, versionId, memoryId, op, JSON.stringify(memorySnapshot(memory)), "store"]
+  );
+}
+
+export interface InsertMemoryTxInput {
+  scopeId: string;
+  memoryId: string;
+  content: string;
+  embedding: number[];
+  layer: MemoryLayer;
+  tags: unknown[];
+  origin: string;
+}
+
 /**
- * Inserts a memory (embedding it first) and its op='insert' version row in
- * one transaction. Creates the scope row if it does not already exist.
+ * Inserts a memory row + op='insert' version row on a caller-managed
+ * client/transaction. Used by rememberMemory (its own single-mutation
+ * transaction) and by consolidate.ts (one transaction per cluster covering
+ * this insert plus every source's consolidateSourceTx update).
+ */
+export async function insertMemoryTx(client: PoolClient, input: InsertMemoryTxInput): Promise<Memory> {
+  const { scopeId, memoryId, content, embedding, layer, tags, origin } = input;
+  const insertResult = await client.query<MemoryRow>(
+    `INSERT INTO memories (scope_id, memory_id, content, embedding, layer, strength, half_life_days,
+       retrieval_count, origin, tags, status)
+     VALUES ($1, $2, $3, $4::vector, $5, 1.0, $6, 0, $7, $8::jsonb, 'active')
+     RETURNING ${MEMORY_COLUMNS}`,
+    [scopeId, memoryId, content, toVectorLiteral(embedding), layer, DEFAULT_HALF_LIFE_DAYS, origin, JSON.stringify(tags)]
+  );
+  const memory = rowToMemory(insertResult.rows[0]);
+  await writeVersion(client, scopeId, memoryId, "insert", memory);
+  return memory;
+}
+
+/**
+ * Embeds content and inserts a memory + its op='insert' version row in one
+ * transaction. Creates the scope row if it does not already exist.
  */
 export async function rememberMemory(input: RememberInput): Promise<Memory> {
   const scopeId = input.scopeId;
@@ -128,28 +176,12 @@ export async function rememberMemory(input: RememberInput): Promise<Memory> {
 
   const embedding = await embed(content);
   const memoryId = newUlid();
-  const versionId = newUlid();
 
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
     await client.query("INSERT INTO scopes (scope_id) VALUES ($1) ON CONFLICT DO NOTHING", [scopeId]);
-
-    const insertResult = await client.query<MemoryRow>(
-      `INSERT INTO memories (scope_id, memory_id, content, embedding, layer, strength, half_life_days,
-         retrieval_count, origin, tags, status)
-       VALUES ($1, $2, $3, $4::vector, $5, 1.0, $6, 0, $7, $8::jsonb, 'active')
-       RETURNING ${MEMORY_COLUMNS}`,
-      [scopeId, memoryId, content, toVectorLiteral(embedding), layer, DEFAULT_HALF_LIFE_DAYS, origin, JSON.stringify(tags)]
-    );
-    const memory = rowToMemory(insertResult.rows[0]);
-
-    await client.query(
-      `INSERT INTO memory_versions (scope_id, version_id, memory_id, op, snapshot, actor)
-       VALUES ($1, $2, $3, 'insert', $4::jsonb, $5)`,
-      [scopeId, versionId, memoryId, JSON.stringify(memorySnapshot(memory)), "store"]
-    );
-
+    const memory = await insertMemoryTx(client, { scopeId, memoryId, content, embedding, layer, tags, origin });
     await client.query("COMMIT");
     return memory;
   } catch (err) {
@@ -169,4 +201,186 @@ export async function getMemory(scopeId: string, memoryId: string): Promise<Memo
   );
   if (result.rows.length === 0) return null;
   return rowToMemory(result.rows[0]);
+}
+
+export interface ReinforceMemoryTxInput {
+  scopeId: string;
+  memoryId: string;
+  now: Date;
+}
+
+/**
+ * Retrieval reinforcement: bumps retrieval_count/last_retrieved_at/strength
+ * and writes an op='retrieve_boost' version row, on a caller-managed
+ * client/transaction (recallMemories shares this transaction with its
+ * recall_log write).
+ */
+export async function reinforceMemoryTx(client: PoolClient, input: ReinforceMemoryTxInput): Promise<Memory> {
+  const { scopeId, memoryId, now } = input;
+  const updateResult = await client.query<MemoryRow>(
+    `UPDATE memories
+     SET retrieval_count = retrieval_count + 1,
+         last_retrieved_at = $3,
+         strength = LEAST(strength + 0.1, 2.0)
+     WHERE scope_id = $1 AND memory_id = $2
+     RETURNING ${MEMORY_COLUMNS}`,
+    [scopeId, memoryId, now]
+  );
+  const memory = rowToMemory(updateResult.rows[0]);
+  await writeVersion(client, scopeId, memoryId, "retrieve_boost", memory);
+  return memory;
+}
+
+export interface ConsolidateSourceTxInput {
+  scopeId: string;
+  memoryId: string;
+  consolidatedInto: string;
+}
+
+/**
+ * Marks a source memory consolidated (status='consolidated' +
+ * consolidated_into) and writes an op='consolidate' version row, on a
+ * caller-managed client/transaction (consolidate.ts calls this once per
+ * source inside the same transaction as the cluster's new semantic memory).
+ */
+export async function consolidateSourceTx(client: PoolClient, input: ConsolidateSourceTxInput): Promise<Memory> {
+  const { scopeId, memoryId, consolidatedInto } = input;
+  const updateResult = await client.query<MemoryRow>(
+    `UPDATE memories
+     SET status = 'consolidated', consolidated_into = $3
+     WHERE scope_id = $1 AND memory_id = $2
+     RETURNING ${MEMORY_COLUMNS}`,
+    [scopeId, memoryId, consolidatedInto]
+  );
+  const memory = rowToMemory(updateResult.rows[0]);
+  await writeVersion(client, scopeId, memoryId, "consolidate", memory);
+  return memory;
+}
+
+export interface RecallInput {
+  scopeId: string;
+  query: string;
+  k?: number;
+}
+
+export interface RecallResult {
+  recallId: string;
+  memories: Memory[];
+}
+
+const DEFAULT_K = 8;
+const CANDIDATE_MULTIPLIER = 3;
+
+interface ScoredCandidate {
+  memory: Memory;
+  distance: number;
+  strength: number;
+  score: number;
+}
+
+// Both embed() modes (fakeEmbed today, Titan V2 in phase 2) unit-normalize
+// their output, so L2 distance between two candidates is bounded in [0, 2]
+// (||a-b||^2 = 2 - 2cos(theta) for unit vectors). Dividing by 2 gives a
+// stable [0,1] term independent of the rest of the candidate batch.
+function scoreCandidate(row: MemoryRow & { distance: number }, now: Date): ScoredCandidate {
+  const memory = rowToMemory(row);
+  const distance = Number(row.distance);
+  const normalizedDistance = Math.min(1, Math.max(0, distance / 2));
+  const strength = strengthAt(memory, now);
+  // Documented re-rank formula (plan Step 9): both distance and current
+  // strength are mandatory terms; the 0.7/0.3 split is this store's tuned
+  // default, not a locked contract.
+  const score = (1 - normalizedDistance) * 0.7 + strength * 0.3;
+  return { memory, distance, strength, score };
+}
+
+function hashEmbedding(embedding: number[]): string {
+  return createHash("sha256").update(embedding.join(",")).digest("hex");
+}
+
+interface ReinforceAndLogInput {
+  scopeId: string;
+  recallId: string;
+  query: string;
+  queryEmbedding: number[];
+  top: ScoredCandidate[];
+  now: Date;
+}
+
+/**
+ * Reinforces every candidate in `top` and writes the recall_log row in one
+ * transaction, so the log always matches exactly what recallMemories
+ * returns. strength_at_recall logs the decayed strength USED to rank (as of
+ * the moment of recall, before this recall's own reinforcement side effect)
+ * - "what did the agent know", not the post-boost value.
+ */
+async function reinforceAndLog(pool: Pool, input: ReinforceAndLogInput): Promise<Memory[]> {
+  const { scopeId, recallId, query, queryEmbedding, top, now } = input;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const boosted: ScoredCandidate[] = [];
+    for (const item of top) {
+      const memory = await reinforceMemoryTx(client, { scopeId, memoryId: item.memory.memoryId, now });
+      boosted.push({ ...item, memory });
+    }
+
+    const results = boosted.map((b) => ({
+      memory_id: b.memory.memoryId,
+      distance: b.distance,
+      strength_at_recall: b.strength,
+      score: b.score,
+    }));
+    await client.query(
+      `INSERT INTO recall_log (scope_id, recall_id, query_text, query_embedding_hash, results)
+       VALUES ($1, $2, $3, $4, $5::jsonb)`,
+      [scopeId, recallId, query, hashEmbedding(queryEmbedding), JSON.stringify(results)]
+    );
+
+    await client.query("COMMIT");
+    return boosted.map((b) => b.memory);
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`recallMemories: failed for scope ${scopeId}: ${message}`);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Scoped vector recall: ANN-orders scope_id+status='active' candidates in
+ * SQL before LIMIT (CLAUDE.md "Common Mistakes to Avoid" - post-filtering in
+ * JS silently starves results), re-ranks the top k*3 in JS by
+ * scoreCandidate(), then reinforces every returned memory and writes the
+ * recall_log row via reinforceAndLog() (one transaction).
+ */
+export async function recallMemories(input: RecallInput): Promise<RecallResult> {
+  const scopeId = input.scopeId;
+  const query = input.query;
+  const k = input.k ?? DEFAULT_K;
+  const candidateLimit = k * CANDIDATE_MULTIPLIER;
+
+  const queryEmbedding = await embed(query);
+  const queryVector = toVectorLiteral(queryEmbedding);
+
+  const pool = getPool();
+  const candidatesResult = await pool.query<MemoryRow & { distance: number }>(
+    `SELECT ${MEMORY_COLUMNS}, embedding <-> $2::vector AS distance
+     FROM memories
+     WHERE scope_id = $1 AND status = 'active'
+     ORDER BY embedding <-> $2::vector
+     LIMIT $3`,
+    [scopeId, queryVector, candidateLimit]
+  );
+
+  const now = new Date();
+  const scored = candidatesResult.rows.map((row) => scoreCandidate(row, now));
+  scored.sort((a, b) => b.score - a.score);
+  const top = scored.slice(0, k);
+  const recallId = newUlid();
+
+  const memories = await reinforceAndLog(pool, { scopeId, recallId, query, queryEmbedding, top, now });
+  return { recallId, memories };
 }

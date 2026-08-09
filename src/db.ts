@@ -29,6 +29,33 @@ const { Pool } = pgModule;
 export const GC_WINDOW_MS = 4500_000;
 export const AOST_SAFE_WINDOW_MS = GC_WINDOW_MS - 300_000;
 
+// Strict ISO-8601 UTC timestamp (what Date.prototype.toISOString() always
+// produces), validated before it is ever string-built into SQL.
+const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+
+/**
+ * Builds a validated `AS OF SYSTEM TIME '...'` clause for `at`.
+ *
+ * Confirmed empirically against local CockroachDB v26.2.5: binding the
+ * timestamp as a query placeholder (`AS OF SYSTEM TIME $1`) is rejected -
+ * `AS OF SYSTEM TIME: only constant expressions, with_min_timestamp,
+ * with_max_staleness, or follower_read_timestamp are allowed`. AOST must be
+ * a constant expression, so this is the one documented exception to
+ * CLAUDE.md rule 3 (parameterized SQL only): the timestamp is validated
+ * against a strict ISO-8601 UTC regex first, then string-built, because the
+ * database itself refuses a bound parameter here. `at` always comes from
+ * `new Date(...)` in this codebase, whose `.toISOString()` is always
+ * well-formed, but the regex check runs anyway since this is the one place
+ * string-building touches SQL at all.
+ */
+export function aostClause(at: Date): string {
+  const iso = at.toISOString();
+  if (!ISO_TIMESTAMP_RE.test(iso)) {
+    throw new Error(`aostClause: invalid timestamp ${iso}`);
+  }
+  return `AS OF SYSTEM TIME '${iso}'`;
+}
+
 /**
  * Fills process.env from .env without overriding variables the shell/CI
  * already set (matches dotenv's precedence). Missing .env is not an error -
