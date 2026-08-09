@@ -15,6 +15,7 @@
     "migrate": "tsx src/migrate.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1106.0",
     "@hono/node-server": "^1.13.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "hono": "^4.6.0",

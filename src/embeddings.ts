@@ -1,12 +1,24 @@
 // Owns every embedding call (docs/ARCHITECTURE.md service boundaries).
-// ENGRAM_FAKE_BEDROCK=1 is the only mode implemented in Phase 1: a
-// deterministic character-trigram bag-of-words projection, not a content
-// hash - it must preserve similarity structure (similar text -> nearby
-// vectors) because recall/needle tests depend on it. The real Bedrock Titan
-// path lands in Phase 2; calling embed() without the fake flag fails loudly
-// rather than silently returning nonsense vectors.
+// ENGRAM_FAKE_BEDROCK=1 is the offline mode (Phase 1): a deterministic
+// character-trigram bag-of-words projection, not a content hash - it must
+// preserve similarity structure (similar text -> nearby vectors) because
+// recall/needle tests depend on it. The real path (Phase 2, below) calls
+// Amazon Bedrock Titan Text Embeddings V2 and is exercised only by
+// scripts/spike/bedrock-live-check.ts, never by the test suite (CLAUDE.md
+// rule 7: tests run offline against the fake).
+
+import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
+// Side-effect import only: db.ts loads .env at module-load time (its
+// bottom-of-file `loadDotEnv()` call). embeddings.ts reads AWS_REGION
+// directly below and must not depend on some OTHER already-imported module
+// (e.g. store/memories.ts) having pulled db.ts in first - discovered via
+// scripts/spike/bedrock-live-check.ts, which imports only this file and
+// failed with "missing required env var AWS_REGION" before this import was
+// added.
+import "./db.js";
 
 const DIM = 1024;
+const MODEL_ID = "amazon.titan-embed-text-v2:0";
 
 function fnv1a(text: string): number {
   let hash = 2166136261;
@@ -35,10 +47,61 @@ function fakeEmbed(text: string): number[] {
   return vector.map((v) => v / norm);
 }
 
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`embeddings: missing required env var ${name}`);
+  }
+  return value;
+}
+
+let client: BedrockRuntimeClient | undefined;
+
+/** Lazy singleton: constructed once, on first real (non-fake) call. */
+function getClient(): BedrockRuntimeClient {
+  if (!client) {
+    client = new BedrockRuntimeClient({ region: requireEnv("AWS_REGION") });
+  }
+  return client;
+}
+
+interface TitanEmbedResponse {
+  embedding: number[];
+}
+
+async function realEmbed(text: string): Promise<number[]> {
+  let response;
+  try {
+    response = await getClient().send(
+      new InvokeModelCommand({
+        modelId: MODEL_ID,
+        contentType: "application/json",
+        accept: "application/json",
+        body: JSON.stringify({ inputText: text, dimensions: DIM, normalize: true }),
+      })
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`embed: Bedrock InvokeModel failed: ${message}`);
+  }
+  if (!response.body) {
+    throw new Error("embed: Bedrock InvokeModel returned no body");
+  }
+  const parsed = JSON.parse(new TextDecoder().decode(response.body)) as TitanEmbedResponse;
+  // CLAUDE.md rule 6: dimension is locked at 1024 - the vector index and
+  // every stored embedding depend on it, so a mismatch fails loudly here
+  // rather than silently corrupting recall.
+  if (!Array.isArray(parsed.embedding) || parsed.embedding.length !== DIM) {
+    const gotLen = Array.isArray(parsed.embedding) ? parsed.embedding.length : typeof parsed.embedding;
+    throw new Error(`embed: expected ${DIM}-dim vector from Titan, got ${gotLen}`);
+  }
+  return parsed.embedding;
+}
+
 /** Embeds text into a 1024-dim vector (CLAUDE.md rule 6: dimension is locked). */
 export async function embed(text: string): Promise<number[]> {
   if (process.env.ENGRAM_FAKE_BEDROCK === "1") {
     return fakeEmbed(text);
   }
-  throw new Error("real Bedrock path lands in phase 2");
+  return realEmbed(text);
 }
