@@ -5,7 +5,7 @@
 // memory_versions row in the same transaction (CLAUDE.md rule 1) even
 // though the transaction lifecycle is managed here, not inside memories.ts.
 
-import { getPool } from "../db.js";
+import { getPool, withTransientRetry } from "../db.js";
 import { embed } from "../embeddings.js";
 import { consolidateCluster } from "../llm.js";
 import { newUlid } from "../ulid.js";
@@ -65,23 +65,29 @@ async function consolidateOneCluster(scopeId: string, cluster: Memory[]): Promis
 
   const client = await getPool().connect();
   try {
-    await client.query("BEGIN");
-    await insertMemoryTx(client, {
-      scopeId,
-      memoryId: newMemoryId,
-      content: mergedContent,
-      embedding: mergedEmbedding,
-      layer: "semantic",
-      tags: [],
-      origin: "consolidation",
+    return await withTransientRetry(async () => {
+      await client.query("BEGIN");
+      try {
+        await insertMemoryTx(client, {
+          scopeId,
+          memoryId: newMemoryId,
+          content: mergedContent,
+          embedding: mergedEmbedding,
+          layer: "semantic",
+          tags: [],
+          origin: "consolidation",
+        });
+        for (const source of cluster) {
+          await consolidateSourceTx(client, { scopeId, memoryId: source.memoryId, consolidatedInto: newMemoryId });
+        }
+        await client.query("COMMIT");
+        return newMemoryId;
+      } catch (err) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw err;
+      }
     });
-    for (const source of cluster) {
-      await consolidateSourceTx(client, { scopeId, memoryId: source.memoryId, consolidatedInto: newMemoryId });
-    }
-    await client.query("COMMIT");
-    return newMemoryId;
   } catch (err) {
-    await client.query("ROLLBACK").catch(() => {});
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`sleepScope: failed consolidating cluster for scope ${scopeId}: ${message}`);
   } finally {

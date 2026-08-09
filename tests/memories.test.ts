@@ -6,33 +6,12 @@ import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { closePool, getPool } from "../src/db.js";
 import { embed } from "../src/embeddings.js";
-import { getMemory, rememberMemory, strengthAt, type Memory } from "../src/store/memories.js";
+import { getMemory, rememberMemory, strengthAt } from "../src/store/memories.js";
 import { newUlid } from "../src/ulid.js";
 
 after(async () => {
   await closePool();
 });
-
-// CockroachDB's vector index (a preview feature per docs/ARCHITECTURE.md)
-// maintains per-partition metadata; bulk-inserting many rows in a tight
-// sequential loop can hit transient serialization contention on that
-// metadata (WriteTooOldError / TransactionRetryWithProtoRefreshError) once
-// the local table has accumulated enough rows across a dev session -
-// reproduced against this exact local instance. CRDB's own guidance is that
-// clients retry serialization errors; this bounded retry is scoped to test
-// bulk-setup only (see tests/recall.test.ts for the same pattern).
-async function rememberWithRetry(input: Parameters<typeof rememberMemory>[0], attempts = 5): Promise<Memory> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await rememberMemory(input);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const retryable = /WriteTooOldError|TransactionRetryWithProtoRefreshError|restart transaction/i.test(message);
-      if (!retryable || attempt >= attempts) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 25 * attempt));
-    }
-  }
-}
 
 test("rememberMemory writes exactly one memories row and one memory_versions row, atomically, with snapshot fidelity", async () => {
   const scopeId = newUlid();
@@ -140,8 +119,8 @@ test("scoped ANN query is correct at ~300 rows across 2 scopes; logs whether the
   const rowsPerScope = 150;
 
   for (let i = 0; i < rowsPerScope; i++) {
-    await rememberWithRetry({ scopeId: scopeA, content: `scope A memory number ${i} about topic ${i % 11}` });
-    await rememberWithRetry({ scopeId: scopeB, content: `scope B memory number ${i} about topic ${i % 11}` });
+    await rememberMemory({ scopeId: scopeA, content: `scope A memory number ${i} about topic ${i % 11}` });
+    await rememberMemory({ scopeId: scopeB, content: `scope B memory number ${i} about topic ${i % 11}` });
   }
 
   const pool = getPool();

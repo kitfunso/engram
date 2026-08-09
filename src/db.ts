@@ -136,3 +136,53 @@ export async function closePool(): Promise<void> {
     await current.end();
   }
 }
+
+// CRDB transient serialization errors: SQLSTATE 40001, surfaced by pg as
+// err.code, or by message text (WriteTooOldError / TransactionRetryWith-
+// ProtoRefreshError / "restart transaction"). CRDB's own guidance is that
+// clients retry these. tests/memories.test.ts and tests/recall.test.ts
+// previously carried a test-only rememberWithRetry wrapper for exactly this
+// error class, observed on vector-index writes during bulk inserts; this is
+// the root-cause fix, in the write paths themselves rather than in tests.
+const TRANSIENT_SQLSTATE = "40001";
+const TRANSIENT_MESSAGE_RE = /WriteTooOldError|TransactionRetryWithProtoRefreshError|restart transaction/i;
+const MAX_ATTEMPTS = 4;
+const BACKOFF_MIN_MS = 25;
+const BACKOFF_MAX_MS = 100;
+
+function isTransientError(err: unknown): boolean {
+  if (err && typeof err === "object" && "code" in err && (err as { code?: unknown }).code === TRANSIENT_SQLSTATE) {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return TRANSIENT_MESSAGE_RE.test(message);
+}
+
+function jitteredBackoffMs(): number {
+  return BACKOFF_MIN_MS + Math.random() * (BACKOFF_MAX_MS - BACKOFF_MIN_MS);
+}
+
+/**
+ * Retries `fn` on CRDB transient serialization errors, up to 4 attempts
+ * total, with a small jittered 25-100ms backoff between attempts. Anything
+ * else (including a non-transient error surfaced only after a prior
+ * transient retry) rethrows immediately.
+ *
+ * Callers must put the ENTIRE transaction body - BEGIN through COMMIT, with
+ * their own ROLLBACK on the failure path - inside `fn`, so a retry replays a
+ * fresh transaction rather than resuming one that already failed. A
+ * partially-applied then-retried transaction would be a correctness bug,
+ * not a resilience win.
+ */
+export async function withTransientRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let attempt = 0;
+  for (;;) {
+    attempt++;
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= MAX_ATTEMPTS || !isTransientError(err)) throw err;
+      await new Promise((resolve) => setTimeout(resolve, jitteredBackoffMs()));
+    }
+  }
+}

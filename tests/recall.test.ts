@@ -6,35 +6,13 @@ import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { closePool, getPool } from "../src/db.js";
 import { embed } from "../src/embeddings.js";
-import { getMemory, rememberMemory, recallMemories, type Memory } from "../src/store/memories.js";
+import { getMemory, rememberMemory, recallMemories } from "../src/store/memories.js";
 import { getRecall } from "../src/store/provenance.js";
 import { newUlid } from "../src/ulid.js";
 
 after(async () => {
   await closePool();
 });
-
-// CockroachDB's vector index (a preview feature per docs/ARCHITECTURE.md)
-// maintains per-partition metadata; bulk-inserting many rows in a tight
-// sequential loop can hit transient serialization contention on that
-// metadata (WriteTooOldError / TransactionRetryWithProtoRefreshError) once
-// the local table has accumulated enough rows across a dev session -
-// reproduced against this exact local instance, including on the
-// pre-existing tests/memories.test.ts bulk-insert loop, unrelated to any
-// Step 9 change. CRDB's own guidance is that clients retry serialization
-// errors; this bounded retry is scoped to test bulk-setup only.
-async function rememberWithRetry(input: Parameters<typeof rememberMemory>[0], attempts = 5): Promise<Memory> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await rememberMemory(input);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const retryable = /WriteTooOldError|TransactionRetryWithProtoRefreshError|restart transaction/i.test(message);
-      if (!retryable || attempt >= attempts) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 25 * attempt));
-    }
-  }
-}
 
 test("planted needle is recalled top-1 for a matching query", async () => {
   const scopeId = newUlid();
@@ -49,7 +27,7 @@ test("planted needle is recalled top-1 for a matching query", async () => {
     "the printer ran out of toner this morning",
   ];
   for (let i = 0; i < 30; i++) {
-    await rememberWithRetry({ scopeId, content: `${decoyTopics[i % decoyTopics.length]} (batch ${i})` });
+    await rememberMemory({ scopeId, content: `${decoyTopics[i % decoyTopics.length]} (batch ${i})` });
   }
 
   const { memories } = await recallMemories({ scopeId, query: "what colour does the user like", k: 8 });
@@ -145,8 +123,8 @@ test("recall SQL EXPLAIN at ~300 rows: logs whether the vector index survives th
   const otherScopeId = newUlid();
   const rowsPerScope = 150;
   for (let i = 0; i < rowsPerScope; i++) {
-    await rememberWithRetry({ scopeId, content: `bulk recall memory ${i} about topic ${i % 13}` });
-    await rememberWithRetry({ scopeId: otherScopeId, content: `other scope memory ${i} about topic ${i % 13}` });
+    await rememberMemory({ scopeId, content: `bulk recall memory ${i} about topic ${i % 13}` });
+    await rememberMemory({ scopeId: otherScopeId, content: `other scope memory ${i} about topic ${i % 13}` });
   }
 
   const pool = getPool();

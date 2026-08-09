@@ -8,7 +8,7 @@
 
 import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
-import { getPool } from "../db.js";
+import { getPool, withTransientRetry } from "../db.js";
 import { newUlid } from "../ulid.js";
 import { embed } from "../embeddings.js";
 import { strengthAt } from "./decay.js";
@@ -179,13 +179,19 @@ export async function rememberMemory(input: RememberInput): Promise<Memory> {
 
   const client = await getPool().connect();
   try {
-    await client.query("BEGIN");
-    await client.query("INSERT INTO scopes (scope_id) VALUES ($1) ON CONFLICT DO NOTHING", [scopeId]);
-    const memory = await insertMemoryTx(client, { scopeId, memoryId, content, embedding, layer, tags, origin });
-    await client.query("COMMIT");
-    return memory;
+    return await withTransientRetry(async () => {
+      await client.query("BEGIN");
+      try {
+        await client.query("INSERT INTO scopes (scope_id) VALUES ($1) ON CONFLICT DO NOTHING", [scopeId]);
+        const memory = await insertMemoryTx(client, { scopeId, memoryId, content, embedding, layer, tags, origin });
+        await client.query("COMMIT");
+        return memory;
+      } catch (err) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw err;
+      }
+    });
   } catch (err) {
-    await client.query("ROLLBACK").catch(() => {});
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`rememberMemory: failed for scope ${scopeId}: ${message}`);
   } finally {
@@ -318,30 +324,35 @@ async function reinforceAndLog(pool: Pool, input: ReinforceAndLogInput): Promise
   const { scopeId, recallId, query, queryEmbedding, top, now } = input;
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    return await withTransientRetry(async () => {
+      await client.query("BEGIN");
+      try {
+        const boosted: ScoredCandidate[] = [];
+        for (const item of top) {
+          const memory = await reinforceMemoryTx(client, { scopeId, memoryId: item.memory.memoryId, now });
+          boosted.push({ ...item, memory });
+        }
 
-    const boosted: ScoredCandidate[] = [];
-    for (const item of top) {
-      const memory = await reinforceMemoryTx(client, { scopeId, memoryId: item.memory.memoryId, now });
-      boosted.push({ ...item, memory });
-    }
+        const results = boosted.map((b) => ({
+          memory_id: b.memory.memoryId,
+          distance: b.distance,
+          strength_at_recall: b.strength,
+          score: b.score,
+        }));
+        await client.query(
+          `INSERT INTO recall_log (scope_id, recall_id, query_text, query_embedding_hash, results)
+           VALUES ($1, $2, $3, $4, $5::jsonb)`,
+          [scopeId, recallId, query, hashEmbedding(queryEmbedding), JSON.stringify(results)]
+        );
 
-    const results = boosted.map((b) => ({
-      memory_id: b.memory.memoryId,
-      distance: b.distance,
-      strength_at_recall: b.strength,
-      score: b.score,
-    }));
-    await client.query(
-      `INSERT INTO recall_log (scope_id, recall_id, query_text, query_embedding_hash, results)
-       VALUES ($1, $2, $3, $4, $5::jsonb)`,
-      [scopeId, recallId, query, hashEmbedding(queryEmbedding), JSON.stringify(results)]
-    );
-
-    await client.query("COMMIT");
-    return boosted.map((b) => b.memory);
+        await client.query("COMMIT");
+        return boosted.map((b) => b.memory);
+      } catch (err) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw err;
+      }
+    });
   } catch (err) {
-    await client.query("ROLLBACK").catch(() => {});
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`recallMemories: failed for scope ${scopeId}: ${message}`);
   } finally {
