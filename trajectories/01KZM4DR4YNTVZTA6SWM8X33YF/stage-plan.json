@@ -1,0 +1,8 @@
+{
+  "episode_id": "01KZM4DR4YNTVZTA6SWM8X33YF",
+  "project_type": "ai",
+  "stages": ["discover", "scaffold", "plan", "execute", "verify", "review", "ship", "deploy", "learn"],
+  "rubric_file": "REWARD.ai.md",
+  "emitted_at": "2026-08-09T21:20:00Z",
+  "notes": "Greenfield hackathon build (CockroachDB x AWS 'Build with Agentic Memory', deadline 2026-08-18 17:00 EDT). Engram: CRDB-native agent-memory engine (hippo model: decay, episodic-to-semantic consolidation, scoped recall, dual-layer time-travel) + Bedrock demo agent + single-file dashboard + MCP wrapper. Composite type ai (+backend, minor ui dashboard - deliberately not typed ui; dashboard is a dev-tool page). Rules verified verbatim: >=2 CRDB tools meaningfully integrated (vector indexing + managed MCP server + ccloud), >=1 AWS service (Bedrock primary; IAM policy gap flagged - armsmith-provisioner lacks bedrock:*), project must be newly created in submission period (complies: repo created 2026-08-09), public repo + OSS license required. Serverless GC TTL ~1.25h -> AS OF SYSTEM TIME demo stays in-window, audit table carries unbounded history. deploy stage = AWS demo deploy + Devpost submission prep (no npm publish)."
+}

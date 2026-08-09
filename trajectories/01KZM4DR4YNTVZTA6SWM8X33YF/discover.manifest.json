@@ -1,0 +1,13 @@
+{
+  "episode_id": "01KZM4DR4YNTVZTA6SWM8X33YF",
+  "stage": "discover",
+  "status": "completed",
+  "summary": "Greenfield discovery for Engram (CRDB x AWS agentic-memory hackathon). Rules read verbatim from devpost /rules: >=2 CRDB tools 'meaningfully integrated - not just initialized' (list: Cloud Managed MCP Server, Distributed Vector Indexing, ccloud CLI, Agent Skills Repo); >=1 AWS service; projects must be NEWLY CREATED during submission period Jun 30 - Aug 18 (fresh-build decision is therefore mandatory - hippo runtime port would have needed disclosure and predates period; engram repo created 2026-08-09 complies); solo entry OK; public repo + OSS license (MIT/Apache) required; deliverables = repo URL + functional demo URL + <3min video + tool identification. Platform facts: CRDB vector indexing (C-SPANN, CREATE VECTOR INDEX, v25.3+ preview, v26.2 docs) is serverless-friendly by design; serverless gc.ttlseconds ~1.25h and not configurable -> AS OF SYSTEM TIME limited to that window, so time-travel is dual-layer (live AS OF in-window + append-only memory-versions audit table for unbounded history). Bedrock probe: AccessDeniedException for IAM user armsmith-provisioner (no bedrock:* policy) - operator console/admin action needed before deploy; fallback AWS services Lambda/S3. Hippo storage seam confirmed sync node:sqlite (DatabaseSync, schema v40) - port infeasible in window, fresh CRDB-native engine locked. ccloud CLI + local cockroach binary not installed (friction recorded). Project type ai (composite +backend, minor dev-tool dashboard).",
+  "artifacts": [
+    {"kind": "sidecar", "path": "trajectories/01KZM4DR4YNTVZTA6SWM8X33YF/stage-plan.json", "role": "sidecar"}
+  ],
+  "skill_invoked": "/dev-framework",
+  "started_at": "2026-08-09T21:05:00Z",
+  "ended_at": "2026-08-09T21:25:00Z",
+  "notes": "Sources: devpost rules page; cockroachlabs.com docs v26.2 (vector, as-of-system-time); distributed-vector-indexing blog; aws bedrock list-foundation-models probe (us-east-1, eu-west-2)."
+}
