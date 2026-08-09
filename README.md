@@ -23,6 +23,36 @@ Tests need zero AWS access. `ENGRAM_FAKE_BEDROCK=1` (set in `.env.example`)
 makes `src/embeddings.ts` and `src/llm.ts` return deterministic fake output
 instead of calling Bedrock.
 
+## API
+
+No auth (the demo is public and unauthenticated by design). Every route
+validates `scope_id` and caps input length at the boundary; bad input
+returns `400 {"error": "..."}`.
+
+| Method | Path | Body / params | Returns |
+|---|---|---|---|
+| POST | `/chat` | `scope_id`, `session_id?`, `message` | `{reply, recall_id, remembered[], session_id}` |
+| POST | `/api/remember` | `scope_id`, `content`, `layer?`, `tags?` | the created memory |
+| POST | `/api/recall` | `scope_id`, `query`, `k?`, `as_of?` | `{recallId, memories}`, or `{memories, usedReplay}` when `as_of` is set |
+| POST | `/api/sleep` | `scope_id` | consolidation result: `{clusters, consolidated, created}` |
+| GET | `/api/memories?scope_id=&status=&layer=&q=` | query params | list of memories, each with `strengthNow` |
+| GET | `/api/memory/:id/history?scope_id=` | query param | version history for one memory |
+| GET | `/api/provenance/:recall_id?scope_id=` | query param | the recall_log entry a reply was built from |
+| GET | `/dashboard` | - | `public/dashboard.html` |
+| GET | `/health` | - | `{ok: true}` |
+
+### Cross-session demo
+
+`scripts/demo-chat.mjs` proves memory persists across sessions: one session
+tells the agent a fact, a brand new session (same scope) asks about it, and
+the reply surfaces the fact.
+
+```
+scripts/test-db-up.ps1     # start local CockroachDB (scripts/test-db-up.sh on Linux/macOS)
+npx tsx src/server.ts      # start the local server (port 8787 by default)
+node scripts/demo-chat.mjs # run the demo against it
+```
+
 ## CockroachDB tools + AWS services used
 
 | Tool / service | Where used | Status |
