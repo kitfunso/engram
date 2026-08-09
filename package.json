@@ -8,11 +8,15 @@
   "engines": {
     "node": ">=24"
   },
+  "bin": {
+    "engram-mcp": "bin/engram-mcp.mjs"
+  },
   "scripts": {
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/**/*.test.ts",
-    "migrate": "tsx src/migrate.ts"
+    "migrate": "tsx src/migrate.ts",
+    "mcp": "npx tsx src/mcp/server.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1106.0",
