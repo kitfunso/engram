@@ -1,0 +1,13 @@
+{
+  "episode_id": "01KZM4DR4YNTVZTA6SWM8X33YF",
+  "stage": "plan",
+  "status": "completed",
+  "summary": "Plan artifact: docs/plans/2026-08-09-phase-1-foundation.md - 12 verifiable steps (scaffold, local cockroach scripts, ccloud cluster, vector-index spike, AOST/GC-window spike, Bedrock spike, migration runner + core schema, versioned store, scoped vector recall + provenance, dual-layer time travel, consolidation, phase-1 wrap) with phases 2-4 sketched. Brainstorm concerns carried forward: sync-seam reframe (fresh build - encoded in PRD IS-NOT #1), GC-window risk (step 5 measures empirically; dual-layer design), day-1 E2E spikes (steps 4-6, per [PROBATION] feedback_harness_knob_e2e_spike), rules compliance (newly-created + disclosure encoded in PRD/CLAUDE.md), scope risk (PRD scope-cut order). Post-grill amendments: operator-gated steps (3, 5-serverless, 6) decoupled so the build never blocks on cloud access; local vector-index fallback to brute-force ORDER BY if preview unavailable locally; FAKE_BEDROCK embeddings specified as similarity-preserving ngram-bag projection rather than content hash.",
+  "artifacts": [
+    {"kind": "docs", "path": "docs/plans/2026-08-09-phase-1-foundation.md", "role": "primary"}
+  ],
+  "skill_invoked": "/project-scaffold",
+  "self_grill_summary": "Grilled own plan: (1) weakest premise = operator availability on the critical path - fixed by explicitly decoupling operator-gated steps 3/5/6 from the local build line; (2) local cockroach may gate vector-index preview off - fixed with brute-force local fallback + cloud-only index assertions; (3) FAKE_BEDROCK as a content hash would break needle-recall tests silently - fixed by requiring similarity-preserving ngram-bag projection; (4) dual-layer time travel challenged as over-engineering - defended: AOST path is a query modifier (~20 lines), not a parallel engine, and is a core judging story; (5) phase-2 fact-extraction flakiness named as a risk deferred to the phase-2 plan (deterministic extraction prompt + always-remember-user-turn fallback).",
+  "started_at": "2026-08-09T21:41:00Z",
+  "ended_at": "2026-08-09T21:50:00Z"
+}

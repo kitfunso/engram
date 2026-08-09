@@ -3,6 +3,7 @@
 **Goal:** Working scaffold with all platform risks retired: local + cloud CockroachDB reachable, vector index proven E2E, GC window measured, Bedrock path decided, core schema migrated, versioned store with passing real-DB tests.
 **Prerequisites:** Episode 01KZM4DR4YNTVZTA6SWM8X33YF open; AWS CLI authed; operator actions pending (Bedrock IAM, ccloud auth) tracked in Step 3/6.
 **Estimated scope:** 12 steps, ~1.5 days. Phases 2-4 sketched at the bottom; each gets its own dated plan when reached.
+**Operator-gated steps: 3, 4 (cloud half), 5 (serverless half), 6.** Every other step runs fully against local cockroach - the build NEVER blocks waiting on cloud access; the cloud halves of the spikes execute whenever the operator gates clear, and their results only adjust constants (index syntax variant, GC window value, model IDs), never module structure.
 
 ---
 
@@ -26,7 +27,7 @@
 
 ## Step 4: SPIKE - vector index E2E on BOTH local and serverless
 **Files:** `scripts/spike/vector-spike.ts`, `scripts/spike/RESULTS.md`
-**What:** Create throwaway table with `VECTOR(1024)`; `CREATE VECTOR INDEX`; insert 1k random vectors; ANN query with scope_id filter; EXPLAIN to confirm index use; measure p50 latency. Settle exact syntax + whether scope prefilter needs index config. Run against local AND cloud.
+**What:** Create throwaway table with `VECTOR(1024)`; `CREATE VECTOR INDEX`; insert 1k random vectors; ANN query with scope_id filter; EXPLAIN to confirm index use; measure p50 latency. Settle exact syntax + whether scope prefilter needs index config. Run against local AND cloud. If the local binary gates the vector-index preview off (cluster setting) or lacks it, local tests fall back to exact brute-force `ORDER BY embedding <-> $1` (VECTOR type without index) and index-specific assertions run cloud-only; RESULTS.md records which mode local uses.
 **Verify:** `RESULTS.md` records: syntax that worked, EXPLAIN output, p50 both targets. Index confirmed used (not full scan).
 **Commit:** `spike: CRDB vector index E2E (syntax + latency, local + serverless)`
 
@@ -38,19 +39,19 @@
 
 ## Step 6: SPIKE - Bedrock access (OPERATOR GATE: IAM policy)
 **Files:** `scripts/spike/bedrock-spike.ts`, `RESULTS.md`
-**What:** Operator attaches Bedrock policy (or provides admin profile) + enables model access for Claude + Titan Embeddings V2 in one region. Spike: one Titan embed call (assert 1024 floats) + one Claude chat call. If blocked > half a day: flip `docs/PRD.md` AWS story to Lambda-only + local embeddings fallback (feature-flagged), record decision.
+**What:** Operator attaches Bedrock policy (or provides admin profile) + enables model access for Claude + Titan Embeddings V2 in one region. Spike: one Titan embed call (assert 1024 floats) + one Claude chat call. If blocked > half a day: LAST-RESORT fallback is Lambda-only AWS story + a local embedding path - explicitly an operator decision (weakens the AWS story), must keep 1024 dims or accept the CLAUDE.md rule-6 consequence (migration + full re-embed), and updates PRD IS-NOT #6 first. The real plan is fixing IAM; the fallback exists so the deadline cannot die on one policy.
 **Verify:** `RESULTS.md` records region, model IDs, latency, cost estimate per call.
 **Commit:** `spike: bedrock titan+claude E2E (region + model ids pinned)`
 
 ## Step 7: Migration runner + core schema
 **Files:** `src/migrate.ts`, `migrations/0001_core.sql`, `src/db.ts`
-**What:** Tiny ordered runner (schema_migrations table). 0001: scopes, memories (with VECTOR 1024 + vector index syntax from Step 4 + secondary decay-sweep index), memory_versions, recall_log, sessions, turns - composite PKs/FKs with scope_id throughout; CHECK constraints per ARCHITECTURE.md. Column names checked against CRDB reserved words.
+**What:** Tiny ordered runner (schema_migrations table). 0001: scopes, memories (with VECTOR 1024 + vector index syntax from Step 4 + secondary decay-sweep index), memory_versions, recall_log, sessions, turns - composite PKs/FKs with scope_id throughout; CHECK constraints per ARCHITECTURE.md. Column names checked against CRDB reserved words. memory_versions/recall_log growth is unbounded by design and fine at demo scale; retention is explicitly deferred post-hackathon (one-line note in README).
 **Verify:** `npx tsx src/migrate.ts` clean on fresh local db; re-run is no-op; `SHOW CREATE TABLE memories` matches doc.
 **Commit:** `feat: migration runner + core schema (0001)`
 
 ## Step 8: Versioned store - remember/get
 **Files:** `src/store/memories.ts`, `src/ulid.ts`, `tests/memories.test.ts`
-**What:** `remember()` (insert memory + version row, same tx), `getMemory()`, strength/decay math helpers (`strengthAt(t)`). ENGRAM_FAKE_BEDROCK deterministic embedding stub in `src/embeddings.ts`.
+**What:** `remember()` (insert memory + version row, same tx), `getMemory()`, strength/decay math helpers (`strengthAt(t)`). ENGRAM_FAKE_BEDROCK embedding stub in `src/embeddings.ts`: deterministic ngram-bag projection (similar text -> nearby vectors), NOT a content hash - needle-recall tests depend on similarity structure surviving the fake.
 **Verify:** tests: remember writes exactly 1 memories row + 1 versions row atomically; decay math matches hand-computed values; parallel scopes isolated.
 **Commit:** `feat: versioned memory writer + decay math`
 
@@ -62,7 +63,7 @@
 
 ## Step 10: Time travel dual-layer
 **Files:** `src/store/timetravel.ts`, `tests/timetravel.test.ts`
-**What:** `recallAsOf(T)`: AS OF SYSTEM TIME fast path when in-window (window constant from Step 5), versions-replay path otherwise; identical result shape. Statuses active-at-T; strength recomputed as-of-T.
+**What:** `recallAsOf(T)`: AS OF SYSTEM TIME fast path when in-window (window constant from Step 5, defined as `GC_WINDOW_MS` in `src/db.ts` per CLAUDE.md), versions-replay path otherwise; identical result shape. Statuses active-at-T; strength recomputed as-of-T.
 **Verify:** tests: mutate a memory 3x, assert state at each historical T via BOTH paths (in-window T uses AOST, forced-replay flag covers the other).
 **Commit:** `feat: dual-layer time travel (AOST + versions replay)`
 
@@ -83,4 +84,4 @@
 ## Later phases (one-line scope; dated plan each when reached)
 - **Phase 2 (agent + API):** Hono routes, demo agent loop (recall -> Claude -> remember), sessions/turns, fact-extraction prompt, local chat E2E.
 - **Phase 3 (surfaces):** dashboard.html (browser, decay curves, lineage, provenance, time-travel slider, Sleep button), MCP server (remember/recall/reflect/recall_asof), CRDB managed MCP server integration for agent self-introspection.
-- **Phase 4 (ship):** Lambda deploy + Function URL, seed demo data, resilience film on local 3-node, sub-3-min video (transcript-driven pipeline), README/diagram polish, Devpost submission by Aug 17.
+- **Phase 4 (ship):** Lambda deploy + Function URL, seed demo data, re-verify PRD p50 < 300ms against the REAL recall() path (re-rank + provenance write included, not the spike table), resilience film on local 3-node, sub-3-min video (transcript-driven pipeline), README/diagram polish, Devpost submission by Aug 17.

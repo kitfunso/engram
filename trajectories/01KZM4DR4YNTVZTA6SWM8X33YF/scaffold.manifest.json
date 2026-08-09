@@ -1,0 +1,15 @@
+{
+  "episode_id": "01KZM4DR4YNTVZTA6SWM8X33YF",
+  "stage": "scaffold",
+  "status": "completed",
+  "summary": "Generated the four foundation documents via /project-scaffold: docs/PRD.md (scope guard with 7-item IS-NOT list, success metrics incl. Aug-17 submission buffer, scope-cut order MCP -> dashboard polish -> resilience film), docs/ARCHITECTURE.md (TS/Node24 + Hono + pg + Bedrock Titan-1024/Claude + Lambda deploy; full schema with scope_id composite FKs, memory_versions append-only audit, dual-layer time-travel semantics, single-write-path service boundary), CLAUDE.md (9 non-negotiables incl. versioned single write path, append-only history, no hippo code, FAKE_BEDROCK test mode, cost cap), docs/plans/2026-08-09-phase-1-foundation.md (12 verifiable steps: scaffold, local cockroach, ccloud cluster [operator gate], 3 de-risking spikes [vector index, GC window, Bedrock], schema, versioned store, recall, time travel, consolidation). Skill question-gates auto-answered from session context per operator standing preference; per-doc approval gates folded into the plan-stage human gate. Committed on master.",
+  "artifacts": [
+    {"kind": "docs", "path": "docs/PRD.md", "role": "primary"},
+    {"kind": "docs", "path": "docs/ARCHITECTURE.md", "role": "primary"},
+    {"kind": "docs", "path": "CLAUDE.md", "role": "primary"},
+    {"kind": "docs", "path": "docs/plans/2026-08-09-phase-1-foundation.md", "role": "primary"}
+  ],
+  "skill_invoked": "/project-scaffold",
+  "started_at": "2026-08-09T21:26:00Z",
+  "ended_at": "2026-08-09T21:40:00Z"
+}
