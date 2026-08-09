@@ -53,12 +53,63 @@ npx tsx src/server.ts      # start the local server (port 8787 by default)
 node scripts/demo-chat.mjs # run the demo against it
 ```
 
+## MCP
+
+Engram ships its own MCP server (`src/mcp/server.ts`, stdio transport, built
+on `@modelcontextprotocol/sdk`) so any MCP client (Claude Code, Claude
+Desktop, etc.) can call the store directly. Same validation caps as the
+HTTP boundary (`src/validate.ts`), same store functions, no direct SQL.
+
+Run it:
+
+```
+npm run mcp
+```
+
+Register it with Claude Code:
+
+```
+claude mcp add engram -- npx tsx C:/path/to/engram/src/mcp/server.ts
+```
+
+Five tools:
+
+| Tool | Description |
+|---|---|
+| `remember` | Store a new memory in a scope. |
+| `recall` | Scoped vector recall of memories matching a query. |
+| `recall_asof` | Historical recall as of a past timestamp (AS OF SYSTEM TIME or `memory_versions` replay). |
+| `reflect` | Sleep/consolidation job: clusters episodic memories into semantic ones. |
+| `introspect` | Engine stats for a scope: counts by layer/status, version/recall/session/turn totals, GC window. |
+
+### CockroachDB Cloud Managed MCP Server
+
+Separately from the server above, CockroachDB Cloud runs its own hosted MCP
+endpoint at `https://cockroachlabs.cloud/mcp` for cluster introspection:
+schema, table stats, and query diagnostics, scoped to one cluster by an
+`mcp-cluster-id` header. It needs no code in this repo; it is a registration
+on the MCP client side, pointed at the engram demo cluster.
+
+Registration pattern (replace the placeholder with your own cluster id -
+never commit a real one):
+
+```
+claude mcp add cockroachdb-cloud https://cockroachlabs.cloud/mcp --transport http --header "mcp-cluster-id: <your-cluster-id>"
+```
+
+The engram demo cluster is registered this way. Worked example a judge can
+run once registered: ask the client "using the cockroachdb-cloud MCP server,
+show me the schema of the `memories` table and its row count on the engram
+cluster" - the client calls the Managed MCP Server directly against the live
+cluster, no engram code involved.
+
 ## CockroachDB tools + AWS services used
 
 | Tool / service | Where used | Status |
 |---|---|---|
 | CockroachDB Distributed Vector Indexing | `migrations/0001_core.sql`, `migrations/0002_vector_index_status.sql`, `src/store/memories.ts` recall | SHIPPED |
-| CockroachDB Cloud Managed MCP Server | Cluster introspection integration | phase 3, registered |
+| MCP wrapper (this repo's server) | `src/mcp/server.ts` | SHIPPED |
+| CockroachDB Cloud Managed MCP Server | Cluster introspection, see [CockroachDB Cloud Managed MCP Server](#cockroachdb-cloud-managed-mcp-server) | registered |
 | ccloud CLI | Ops/setup | optional |
 | Amazon Bedrock - Titan Text Embeddings V2 + Claude | `src/embeddings.ts`, `src/llm.ts` | fake mode shipped, real path phase 2 |
 | AWS Lambda | Deploy | phase 4 |
