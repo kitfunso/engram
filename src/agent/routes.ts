@@ -17,7 +17,8 @@ import { recallMemories, rememberMemory, type MemoryLayer } from "../store/memor
 import { listMemories } from "../store/list.js";
 import { recallAsOf } from "../store/timetravel.js";
 import { sleepScope } from "../store/consolidate.js";
-import { getMemoryHistory, getRecall } from "../store/provenance.js";
+import { getMemoryHistory, getRecallWithContent } from "../store/provenance.js";
+import { getIntrospectStats } from "../store/introspect.js";
 import { createSession } from "../store/sessions.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -114,6 +115,17 @@ async function readJsonBody(c: Context): Promise<Record<string, unknown>> {
   return body as Record<string, unknown>;
 }
 
+// Route-boundary response mapper: every store Memory carries its full
+// 1024-float embedding (needed internally for recall/consolidation), but no
+// API response should ship it - it is large, write-only from the client's
+// perspective, and never rendered by the dashboard. Strips it at the one
+// place responses leave the store layer, rather than teaching every route
+// (or the store) about response shaping.
+function toApiMemory<T extends { embedding: number[] }>(memory: T): Omit<T, "embedding"> {
+  const { embedding, ...rest } = memory;
+  return rest;
+}
+
 export const app = new Hono();
 
 app.post("/chat", async (c) => {
@@ -139,7 +151,7 @@ app.post("/api/remember", async (c) => {
   const tags = optionalTags(body.tags);
 
   const memory = await rememberMemory({ scopeId, content, layer, tags });
-  return c.json(memory);
+  return c.json(toApiMemory(memory));
 });
 
 app.post("/api/recall", async (c) => {
@@ -151,10 +163,10 @@ app.post("/api/recall", async (c) => {
 
   if (asOf) {
     const result = await recallAsOf({ scopeId, query, at: asOf, k });
-    return c.json(result);
+    return c.json({ memories: result.memories.map(toApiMemory), usedReplay: result.usedReplay });
   }
   const result = await recallMemories({ scopeId, query, k });
-  return c.json(result);
+  return c.json({ recallId: result.recallId, memories: result.memories.map(toApiMemory) });
 });
 
 app.post("/api/sleep", async (c) => {
@@ -171,7 +183,7 @@ app.get("/api/memories", async (c) => {
   const q = optionalText(c.req.query("q"), "q", MAX_QUERY_LEN);
 
   const memories = await listMemories({ scopeId, status, layer, q });
-  return c.json(memories);
+  return c.json(memories.map(toApiMemory));
 });
 
 app.get("/api/memory/:id/history", async (c) => {
@@ -184,9 +196,15 @@ app.get("/api/memory/:id/history", async (c) => {
 app.get("/api/provenance/:recall_id", async (c) => {
   const scopeId = requireId(c.req.query("scope_id"), "scope_id");
   const recallId = requireId(c.req.param("recall_id"), "recall_id");
-  const recall = await getRecall(scopeId, recallId);
+  const recall = await getRecallWithContent(scopeId, recallId);
   if (!recall) return c.json({ error: "not found" }, 404);
   return c.json(recall);
+});
+
+app.get("/api/introspect", async (c) => {
+  const scopeId = requireId(c.req.query("scope_id"), "scope_id");
+  const stats = await getIntrospectStats(scopeId);
+  return c.json(stats);
 });
 
 app.get("/dashboard", async (c) => {

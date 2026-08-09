@@ -3,28 +3,696 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Engram dashboard</title>
+<title>Engram</title>
 <style>
-  :root { color-scheme: dark; }
-  body {
-    margin: 0;
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #0b0d10;
-    color: #e6e6e6;
-    font-family: system-ui, -apple-system, sans-serif;
+  :root {
+    color-scheme: dark;
+    --bg: #0b0e14; --bg-panel: #0e121a; --bg-raised: #131722; --border: #1f2430;
+    --text: #c9d1d9; --text-dim: #6b7280; --accent: #4ade80; --accent-dim: #1f4d34;
+    --warn: #fbbf24; --warn-dim: #4d3f18;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  main { text-align: center; padding: 2rem; }
-  h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
-  p { color: #9aa0a6; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 13px; }
+  .mono { font-family: var(--mono); }
+  input, select, button {
+    font-family: var(--sans); font-size: 12px; background: var(--bg-raised); color: var(--text);
+    border: 1px solid var(--border); border-radius: 3px; padding: 4px 7px;
+  }
+  input.mono, .mono input { font-family: var(--mono); }
+  button { cursor: pointer; color: var(--accent); }
+  button:hover { border-color: var(--accent); }
+  button:disabled { color: var(--text-dim); cursor: default; border-color: var(--border); }
+  a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* --- top bar --- */
+  #topbar {
+    display: flex; align-items: center; gap: 14px; padding: 8px 14px;
+    border-bottom: 1px solid var(--border); background: var(--bg-panel); flex-wrap: wrap;
+  }
+  #topbar h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0.04em; color: var(--accent); text-transform: uppercase; }
+  #scope-input { width: 220px; }
+  #stats-bar { display: flex; gap: 14px; margin-left: auto; flex-wrap: wrap; }
+  .stat { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.2; }
+  .stat-label { color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .stat-value { font-family: var(--mono); font-size: 13px; }
+  #load-status { color: var(--warn); font-size: 11px; }
+
+  /* --- layout --- */
+  #layout { display: flex; align-items: stretch; min-height: calc(100vh - 41px); }
+  #left { flex: 3; min-width: 0; border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+  #right { flex: 2; min-width: 0; display: flex; flex-direction: column; }
+
+  .panel { border-bottom: 1px solid var(--border); padding: 10px 14px; }
+  .panel h2 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); font-weight: 600; }
+  .empty { color: var(--text-dim); font-style: italic; padding: 6px 0; }
+
+  /* --- filters --- */
+  #filters { display: flex; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
+  #filters input { flex: 1; min-width: 100px; }
+
+  /* --- memory table --- */
+  #table-wrap { flex: 1; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th {
+    position: sticky; top: 0; background: var(--bg-panel); text-align: left; padding: 6px 8px;
+    border-bottom: 1px solid var(--border); color: var(--text-dim); font-weight: 600; font-size: 10px; text-transform: uppercase;
+  }
+  td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: rgba(255,255,255,0.03); }
+  tbody tr.selected { background: rgba(74,222,128,0.08); box-shadow: inset 2px 0 0 var(--accent); }
+  .content-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .badge {
+    display: inline-block; padding: 1px 5px; border: 1px solid var(--border); border-radius: 3px;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.02em; font-family: var(--mono);
+  }
+  .badge-active, .badge-episodic, .badge-insert, .badge-retrieve_boost { color: var(--accent); border-color: var(--accent-dim); }
+  .badge-consolidated, .badge-semantic, .badge-consolidate, .badge-decay, .badge-delete { color: var(--warn); border-color: var(--warn-dim); }
+  .badge-deleted { color: var(--text-dim); }
+
+  .bar-track { width: 56px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; display: inline-block; vertical-align: middle; }
+  .bar-fill { height: 100%; background: var(--accent); }
+  .bar-fill.low { background: var(--warn); }
+
+  /* --- decay chart --- */
+  #decay-svg { width: 100%; height: 180px; display: block; }
+  .decay-line { fill: none; stroke: #3a4152; stroke-width: 1; }
+  .decay-line.selected { stroke: var(--accent); stroke-width: 2; }
+  .decay-line.low { stroke: var(--warn); }
+  .axis-line { stroke: var(--border); stroke-width: 1; }
+  .axis-label { fill: var(--text-dim); font-size: 9px; font-family: var(--mono); }
+
+  /* --- history --- */
+  .hist-row { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 11px; }
+  .hist-row:last-child { border-bottom: none; }
+  .hist-at { color: var(--text-dim); font-family: var(--mono); font-size: 10px; }
+
+  /* --- provenance --- */
+  #provenance-form { display: flex; gap: 6px; margin-bottom: 8px; }
+  #provenance-recall-input { flex: 1; }
+  .prov-meta { color: var(--text-dim); font-size: 11px; margin-bottom: 6px; }
+  .prov-row { display: flex; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--border); font-size: 11px; align-items: baseline; }
+  .prov-row:last-child { border-bottom: none; }
+  .prov-content { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prov-num { color: var(--text-dim); font-family: var(--mono); font-size: 10px; white-space: nowrap; }
+
+  /* --- time travel --- */
+  #tt-form { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  #tt-datetime { width: 190px; }
+  #tt-query { flex: 1; min-width: 120px; }
+  #tt-note { color: var(--text-dim); font-size: 11px; margin-bottom: 4px; }
+
+  /* --- actions --- */
+  #actions-panel { display: flex; flex-direction: column; gap: 10px; }
+  #sleep-row { display: flex; align-items: center; gap: 10px; }
+  #sleep-result { color: var(--text-dim); font-size: 11px; }
+  #chat-form { display: flex; gap: 6px; }
+  #chat-input { flex: 1; }
+  #chat-log { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; max-height: 140px; overflow: auto; }
+  .chat-entry { font-size: 11px; border-left: 2px solid var(--border); padding-left: 6px; }
+  .chat-entry .chat-role { color: var(--text-dim); text-transform: uppercase; font-size: 9px; letter-spacing: 0.03em; }
 </style>
 </head>
 <body>
-<main>
-  <h1>Engram dashboard</h1>
-  <p>Placeholder page. The full observability dashboard ships in phase 3.</p>
-</main>
+
+<div id="topbar">
+  <h1>Engram</h1>
+  <input id="scope-input" class="mono" type="text" placeholder="scope_id" />
+  <button id="load-btn" type="button">Load</button>
+  <span id="load-status"></span>
+  <div id="stats-bar"></div>
+</div>
+
+<div id="layout">
+  <div id="left">
+    <div id="filters">
+      <select id="layer-filter">
+        <option value="">layer: any</option>
+        <option value="episodic">episodic</option>
+        <option value="semantic">semantic</option>
+      </select>
+      <select id="status-filter">
+        <option value="">status: any</option>
+        <option value="active">active</option>
+        <option value="consolidated">consolidated</option>
+        <option value="deleted">deleted</option>
+      </select>
+      <input id="q-filter" type="text" placeholder="search content..." />
+    </div>
+    <div id="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>content</th>
+            <th>layer</th>
+            <th>status</th>
+            <th>strength</th>
+            <th>retr.</th>
+            <th>age</th>
+          </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+      <div id="table-empty" class="empty" style="display:none; padding:10px 14px;">No memories loaded. Enter a scope_id above and click Load.</div>
+    </div>
+  </div>
+
+  <div id="right">
+    <div class="panel">
+      <h2>Decay curves (next 30 days)</h2>
+      <svg id="decay-svg" viewBox="0 0 520 180"></svg>
+      <div id="decay-empty" class="empty" style="display:none;">No memories to project.</div>
+    </div>
+
+    <div class="panel">
+      <h2>History <span id="history-title" class="mono" style="color:var(--text-dim); text-transform:none;"></span></h2>
+      <div id="history-body"></div>
+      <div id="history-empty" class="empty">Select a memory in the browser to see its version timeline.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Provenance</h2>
+      <div id="provenance-form">
+        <input id="provenance-recall-input" class="mono" type="text" placeholder="recall_id" />
+        <button id="provenance-load-btn" type="button">Load</button>
+      </div>
+      <div id="provenance-body"></div>
+      <div id="provenance-empty" class="empty">No recall loaded. Paste a recall_id, click a memory's recall in chat, or run a time-travel recall.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Time travel</h2>
+      <div id="tt-form">
+        <input id="tt-datetime" type="datetime-local" step="1" />
+        <input id="tt-query" type="text" placeholder="query (required)" />
+        <button id="tt-btn" type="button">Recall</button>
+      </div>
+      <div id="tt-note"></div>
+      <div id="tt-results"></div>
+      <div id="tt-empty" class="empty">Pick a timestamp and query, then Recall.</div>
+    </div>
+
+    <div class="panel" id="actions-panel">
+      <h2>Actions</h2>
+      <div id="sleep-row">
+        <button id="sleep-btn" type="button">Sleep now</button>
+        <span id="sleep-result"></span>
+      </div>
+      <div>
+        <form id="chat-form">
+          <input id="chat-input" type="text" placeholder="say something to the agent..." />
+          <button id="chat-send-btn" type="submit">Send</button>
+        </form>
+        <div id="chat-log"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- state ----------------------------------------------------------
+  var state = {
+    scopeId: "",
+    memories: [],
+    selectedId: null,
+    sessionId: null,
+  };
+
+  // ---- tiny dom helpers -------------------------------------------------
+  function $(id) { return document.getElementById(id); }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+
+  // ---- fetch helper -------------------------------------------------------
+  function api(path, opts) {
+    return fetch(path, opts).then(function (res) {
+      return res.text().then(function (raw) {
+        var body = null;
+        try { body = raw ? JSON.parse(raw) : null; } catch (e) { body = null; }
+        if (!res.ok) {
+          var msg = (body && body.error) || res.statusText || ("HTTP " + res.status);
+          throw new Error(msg);
+        }
+        return body;
+      });
+    });
+  }
+  function qs(params) {
+    var parts = [];
+    for (var k in params) {
+      if (params[k] !== undefined && params[k] !== null && params[k] !== "") {
+        parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(params[k]));
+      }
+    }
+    return parts.join("&");
+  }
+  function postJson(path, body) {
+    return api(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  function ageLabel(iso) {
+    var ms = Date.now() - new Date(iso).getTime();
+    var s = Math.max(0, Math.floor(ms / 1000));
+    if (s < 60) return s + "s";
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + "m";
+    var h = Math.floor(m / 60);
+    if (h < 24) return h + "h";
+    return Math.floor(h / 24) + "d";
+  }
+
+  // ---- top bar / introspect ----------------------------------------------
+  function renderStats(stats) {
+    var bar = $("stats-bar");
+    clear(bar);
+    if (!stats) return;
+    var entries = [
+      ["episodic", stats.counts.byLayer.episodic || 0],
+      ["semantic", stats.counts.byLayer.semantic || 0],
+      ["active", stats.counts.byStatus.active || 0],
+      ["consolidated", stats.counts.byStatus.consolidated || 0],
+      ["versions", stats.versionsCount],
+      ["recalls", stats.recallCount],
+      ["sessions", stats.sessionsCount],
+      ["turns", stats.turnsCount],
+      ["gc window", Math.round(stats.gcWindowMs / 1000) + "s"],
+      ["dim", stats.embeddingDim],
+    ];
+    entries.forEach(function (pair) {
+      var wrap = document.createElement("div");
+      wrap.className = "stat";
+      var label = document.createElement("span");
+      label.className = "stat-label";
+      label.textContent = pair[0];
+      var value = document.createElement("span");
+      value.className = "stat-value";
+      value.textContent = String(pair[1]);
+      wrap.appendChild(label);
+      wrap.appendChild(value);
+      bar.appendChild(wrap);
+    });
+  }
+
+  function loadIntrospect() {
+    return api("/api/introspect?" + qs({ scope_id: state.scopeId })).then(renderStats);
+  }
+
+  // ---- memory browser -----------------------------------------------------
+  function currentFilters() {
+    return {
+      scope_id: state.scopeId,
+      layer: $("layer-filter").value,
+      status: $("status-filter").value,
+      q: $("q-filter").value,
+    };
+  }
+
+  function loadMemories() {
+    return api("/api/memories?" + qs(currentFilters())).then(function (memories) {
+      state.memories = memories;
+      renderTable();
+      renderDecayChart();
+    });
+  }
+
+  function strengthBar(strengthNow) {
+    var pct = Math.max(0, Math.min(1, strengthNow)) * 100;
+    var cls = strengthNow >= 0.5 ? "" : " low";
+    return '<span class="bar-track"><span class="bar-fill' + cls + '" style="width:' + pct.toFixed(0) + '%"></span></span>';
+  }
+
+  function renderTable() {
+    var tbody = $("table-body");
+    clear(tbody);
+    var empty = $("table-empty");
+    if (!state.scopeId) {
+      empty.textContent = "No memories loaded. Enter a scope_id above and click Load.";
+      empty.style.display = "block";
+      return;
+    }
+    if (state.memories.length === 0) {
+      empty.textContent = "No memories match the current filters.";
+      empty.style.display = "block";
+      return;
+    }
+    empty.style.display = "none";
+    state.memories.forEach(function (m) {
+      var tr = document.createElement("tr");
+      if (m.memoryId === state.selectedId) tr.className = "selected";
+      tr.addEventListener("click", function () { selectMemory(m.memoryId); });
+
+      var contentTd = document.createElement("td");
+      contentTd.className = "content-cell";
+      var truncated = m.content.length > 80 ? m.content.slice(0, 80) + "…" : m.content;
+      contentTd.textContent = truncated;
+      contentTd.title = m.content;
+      tr.appendChild(contentTd);
+
+      var layerTd = document.createElement("td");
+      layerTd.innerHTML = '<span class="badge badge-' + m.layer + '">' + m.layer + "</span>";
+      tr.appendChild(layerTd);
+
+      var statusTd = document.createElement("td");
+      statusTd.innerHTML = '<span class="badge badge-' + m.status + '">' + m.status + "</span>";
+      tr.appendChild(statusTd);
+
+      var strengthTd = document.createElement("td");
+      strengthTd.innerHTML = strengthBar(m.strengthNow) + ' <span class="mono">' + m.strengthNow.toFixed(2) + "</span>";
+      tr.appendChild(strengthTd);
+
+      var retrTd = document.createElement("td");
+      retrTd.className = "mono";
+      retrTd.textContent = String(m.retrievalCount);
+      tr.appendChild(retrTd);
+
+      var ageTd = document.createElement("td");
+      ageTd.className = "mono";
+      ageTd.textContent = ageLabel(m.createdAt);
+      tr.appendChild(ageTd);
+
+      tbody.appendChild(tr);
+    });
+  }
+
+  // ---- decay curves ---------------------------------------------------------
+  function renderDecayChart() {
+    var svg = $("decay-svg");
+    var empty = $("decay-empty");
+    clear(svg);
+    var visible = state.memories.slice(0, 8);
+    if (state.selectedId && visible.every(function (m) { return m.memoryId !== state.selectedId; })) {
+      var sel = state.memories.filter(function (m) { return m.memoryId === state.selectedId; })[0];
+      if (sel) visible = visible.slice(0, 7).concat([sel]);
+    }
+    if (visible.length === 0) {
+      empty.style.display = "block";
+      return;
+    }
+    empty.style.display = "none";
+
+    var W = 520, H = 180, padL = 32, padR = 10, padT = 10, padB = 20;
+    var days = 30;
+    var series = visible.map(function (m) {
+      var pts = [];
+      for (var d = 0; d <= days; d++) {
+        pts.push({ day: d, strength: m.strengthNow * Math.pow(0.5, d / m.halfLifeDays) });
+      }
+      return { memory: m, pts: pts };
+    });
+    var maxStrength = 1;
+    series.forEach(function (s) {
+      s.pts.forEach(function (p) { if (p.strength > maxStrength) maxStrength = p.strength; });
+    });
+    maxStrength = maxStrength * 1.05;
+
+    function x(day) { return padL + (day / days) * (W - padL - padR); }
+    function y(strength) { return H - padB - (strength / maxStrength) * (H - padT - padB); }
+
+    var ns = "http://www.w3.org/2000/svg";
+    function svgEl(tag, attrs) {
+      var e = document.createElementNS(ns, tag);
+      for (var k in attrs) e.setAttribute(k, attrs[k]);
+      return e;
+    }
+
+    // axes
+    svg.appendChild(svgEl("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, class: "axis-line" }));
+    svg.appendChild(svgEl("line", { x1: padL, y1: padT, x2: padL, y2: H - padB, class: "axis-line" }));
+    [0, 15, 30].forEach(function (d) {
+      var lbl = svgEl("text", { x: x(d), y: H - 4, class: "axis-label", "text-anchor": "middle" });
+      lbl.textContent = d + "d";
+      svg.appendChild(lbl);
+    });
+    var yTop = svgEl("text", { x: 2, y: padT + 8, class: "axis-label" });
+    yTop.textContent = maxStrength.toFixed(2);
+    svg.appendChild(yTop);
+    var yBot = svgEl("text", { x: 2, y: H - padB, class: "axis-label" });
+    yBot.textContent = "0";
+    svg.appendChild(yBot);
+
+    series.forEach(function (s) {
+      var d = s.pts.map(function (p, i) { return (i === 0 ? "M" : "L") + x(p.day).toFixed(1) + "," + y(p.strength).toFixed(1); }).join(" ");
+      var isSelected = s.memory.memoryId === state.selectedId;
+      var cls = "decay-line" + (isSelected ? " selected" : "") + (isSelected && s.memory.strengthNow < 0.5 ? " low" : "");
+      var path = svgEl("path", { d: d, class: cls });
+      var title = svgEl("title", {});
+      title.textContent = s.memory.content.slice(0, 60);
+      path.appendChild(title);
+      svg.appendChild(path);
+    });
+  }
+
+  // ---- history -------------------------------------------------------------
+  function loadHistory(memoryId) {
+    return api("/api/memory/" + encodeURIComponent(memoryId) + "/history?" + qs({ scope_id: state.scopeId })).then(function (entries) {
+      renderHistory(memoryId, entries);
+    });
+  }
+
+  function renderHistory(memoryId, entries) {
+    $("history-title").textContent = memoryId;
+    var body = $("history-body");
+    clear(body);
+    var empty = $("history-empty");
+    if (entries.length === 0) {
+      empty.textContent = "No version history for this memory.";
+      empty.style.display = "block";
+      return;
+    }
+    empty.style.display = "none";
+    entries.forEach(function (v) {
+      var row = document.createElement("div");
+      row.className = "hist-row";
+
+      var badge = document.createElement("span");
+      badge.className = "badge badge-" + v.op;
+      badge.textContent = v.op;
+      row.appendChild(badge);
+
+      var at = document.createElement("span");
+      at.className = "hist-at";
+      at.textContent = new Date(v.at).toISOString();
+      row.appendChild(at);
+
+      if (v.snapshot && v.snapshot.consolidatedInto) {
+        var link = document.createElement("a");
+        link.textContent = "→ " + v.snapshot.consolidatedInto;
+        link.className = "mono";
+        link.addEventListener("click", function () { selectMemory(v.snapshot.consolidatedInto); });
+        row.appendChild(link);
+      }
+      body.appendChild(row);
+    });
+  }
+
+  function selectMemory(memoryId) {
+    state.selectedId = memoryId;
+    renderTable();
+    renderDecayChart();
+    loadHistory(memoryId).catch(function (err) { showError(err); });
+  }
+
+  // ---- provenance -----------------------------------------------------------
+  function loadProvenance(recallId) {
+    if (!recallId) return Promise.resolve();
+    $("provenance-recall-input").value = recallId;
+    return api("/api/provenance/" + encodeURIComponent(recallId) + "?" + qs({ scope_id: state.scopeId })).then(renderProvenance);
+  }
+
+  function renderProvenance(entry) {
+    var body = $("provenance-body");
+    clear(body);
+    var empty = $("provenance-empty");
+    if (!entry) {
+      empty.textContent = "recall_id not found for this scope.";
+      empty.style.display = "block";
+      return;
+    }
+    empty.style.display = "none";
+
+    var meta = document.createElement("div");
+    meta.className = "prov-meta";
+    meta.textContent = 'query: "' + entry.queryText + '" at ' + new Date(entry.at).toISOString();
+    body.appendChild(meta);
+
+    entry.results.forEach(function (r) {
+      var row = document.createElement("div");
+      row.className = "prov-row";
+
+      var content = document.createElement("span");
+      content.className = "prov-content";
+      content.textContent = r.content !== null ? r.content : "(memory not found)";
+      row.appendChild(content);
+
+      var dist = document.createElement("span");
+      dist.className = "prov-num";
+      dist.textContent = "dist " + r.distance.toFixed(3);
+      row.appendChild(dist);
+
+      var strength = document.createElement("span");
+      strength.className = "prov-num";
+      strength.textContent = "str " + r.strengthAtRecall.toFixed(3);
+      row.appendChild(strength);
+
+      body.appendChild(row);
+    });
+  }
+
+  // ---- time travel -----------------------------------------------------------
+  function doTimeTravel() {
+    var dtVal = $("tt-datetime").value;
+    var query = $("tt-query").value.trim();
+    var note = $("tt-note");
+    var results = $("tt-results");
+    var empty = $("tt-empty");
+    clear(results);
+    note.textContent = "";
+    if (!dtVal || !query) {
+      note.textContent = "pick a timestamp and enter a query first.";
+      return;
+    }
+    var asOf = new Date(dtVal).toISOString();
+    postJson("/api/recall", { scope_id: state.scopeId, query: query, as_of: asOf })
+      .then(function (body) {
+        empty.style.display = "none";
+        note.textContent = "as of " + asOf + " — served via " + (body.usedReplay ? "replay (memory_versions)" : "fast path (AOST)");
+        if (body.memories.length === 0) {
+          var e = document.createElement("div");
+          e.className = "empty";
+          e.textContent = "No memories existed for this scope at that time.";
+          results.appendChild(e);
+          return;
+        }
+        body.memories.forEach(function (m) {
+          var row = document.createElement("div");
+          row.className = "prov-row";
+          var content = document.createElement("span");
+          content.className = "prov-content";
+          content.textContent = m.content;
+          row.appendChild(content);
+          var strength = document.createElement("span");
+          strength.className = "prov-num";
+          strength.textContent = "str " + m.strength.toFixed(3);
+          row.appendChild(strength);
+          results.appendChild(row);
+        });
+      })
+      .catch(showError);
+  }
+
+  // ---- actions: sleep + chat --------------------------------------------------
+  function doSleep() {
+    var btn = $("sleep-btn");
+    var result = $("sleep-result");
+    btn.disabled = true;
+    result.textContent = "running...";
+    postJson("/api/sleep", { scope_id: state.scopeId })
+      .then(function (body) {
+        result.textContent = body.clusters + " cluster(s), " + body.consolidated + " consolidated, " + body.created.length + " created";
+        return Promise.all([loadMemories(), loadIntrospect()]);
+      })
+      .catch(showError)
+      .then(function () { btn.disabled = false; });
+  }
+
+  function appendChatEntry(role, text) {
+    var log = $("chat-log");
+    var entry = document.createElement("div");
+    entry.className = "chat-entry";
+    var roleEl = document.createElement("div");
+    roleEl.className = "chat-role";
+    roleEl.textContent = role;
+    var textEl = document.createElement("div");
+    textEl.textContent = text;
+    entry.appendChild(roleEl);
+    entry.appendChild(textEl);
+    log.appendChild(entry);
+    log.scrollTop = log.scrollHeight;
+    return entry;
+  }
+
+  function doChat(ev) {
+    ev.preventDefault();
+    var input = $("chat-input");
+    var message = input.value.trim();
+    if (!message) return;
+    input.value = "";
+    appendChatEntry("user", message);
+    postJson("/chat", { scope_id: state.scopeId, message: message, session_id: state.sessionId || undefined })
+      .then(function (body) {
+        state.sessionId = body.session_id;
+        var entry = appendChatEntry("assistant", body.reply);
+        var link = document.createElement("a");
+        link.className = "mono";
+        link.textContent = "recall_id " + body.recall_id;
+        link.addEventListener("click", function () { loadProvenance(body.recall_id).catch(showError); });
+        entry.appendChild(link);
+        return Promise.all([loadMemories(), loadIntrospect(), loadProvenance(body.recall_id)]);
+      })
+      .catch(showError);
+  }
+
+  // ---- errors -------------------------------------------------------------
+  function showError(err) {
+    var status = $("load-status");
+    status.textContent = err && err.message ? err.message : String(err);
+    setTimeout(function () { if (status.textContent === (err && err.message)) status.textContent = ""; }, 5000);
+  }
+
+  // ---- load orchestration ---------------------------------------------------
+  function loadAll() {
+    state.scopeId = $("scope-input").value.trim();
+    state.selectedId = null;
+    $("load-status").textContent = "";
+    if (!state.scopeId) {
+      showError(new Error("enter a scope_id first"));
+      return;
+    }
+    Promise.all([loadIntrospect(), loadMemories()]).catch(showError);
+  }
+
+  // ---- wiring ---------------------------------------------------------------
+  $("load-btn").addEventListener("click", loadAll);
+  $("scope-input").addEventListener("keydown", function (ev) { if (ev.key === "Enter") loadAll(); });
+  $("layer-filter").addEventListener("change", function () { if (state.scopeId) loadMemories().catch(showError); });
+  $("status-filter").addEventListener("change", function () { if (state.scopeId) loadMemories().catch(showError); });
+  $("q-filter").addEventListener("input", debounce(function () { if (state.scopeId) loadMemories().catch(showError); }, 300));
+  $("provenance-load-btn").addEventListener("click", function () {
+    var id = $("provenance-recall-input").value.trim();
+    if (id) loadProvenance(id).catch(showError);
+  });
+  $("tt-btn").addEventListener("click", doTimeTravel);
+  $("sleep-btn").addEventListener("click", doSleep);
+  $("chat-form").addEventListener("submit", doChat);
+
+  function debounce(fn, ms) {
+    var t;
+    return function () {
+      var args = arguments;
+      clearTimeout(t);
+      t = setTimeout(function () { fn.apply(null, args); }, ms);
+    };
+  }
+
+  renderTable();
+  renderDecayChart();
+})();
+</script>
 </body>
 </html>

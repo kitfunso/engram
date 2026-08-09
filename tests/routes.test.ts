@@ -44,11 +44,11 @@ test("unknown route returns 404 JSON", async () => {
   assert.equal(body.error, "not found");
 });
 
-test("GET /dashboard serves the placeholder page", async () => {
+test("GET /dashboard serves the observability dashboard", async () => {
   const res = await app.request("/dashboard");
   assert.equal(res.status, 200);
   const html = await res.text();
-  assert.ok(html.includes("Engram dashboard"));
+  assert.ok(html.includes("Engram"));
 });
 
 // --- /api/remember -----------------------------------------------------------
@@ -61,6 +61,7 @@ test("POST /api/remember creates a memory and returns it", async () => {
   assert.equal(memory.scopeId, scopeId);
   assert.equal(memory.content, "the sky is blue");
   assert.equal(memory.layer, "episodic");
+  assert.equal("embedding" in memory, false, "response must not include the raw embedding");
 });
 
 test("POST /api/remember rejects a malformed scope_id", async () => {
@@ -87,6 +88,10 @@ test("POST /api/recall returns the remembered memory for a matching query", asyn
   const body = await json(res);
   assert.ok(body.recallId);
   assert.ok(body.memories.some((m: { content: string }) => m.content === "my dog is called Biscuit"));
+  assert.ok(
+    body.memories.every((m: Record<string, unknown>) => !("embedding" in m)),
+    "recall response must not include raw embeddings"
+  );
 });
 
 test("POST /api/recall with as_of routes to a historical (timetravel) read", async () => {
@@ -141,6 +146,7 @@ test("GET /api/memories lists memories for a scope, filtered by q", async () => 
   assert.equal(memories.length, 1);
   assert.equal(memories[0].content, "apples are red");
   assert.equal(typeof memories[0].strengthNow, "number");
+  assert.equal("embedding" in memories[0], false, "response must not include the raw embedding");
 });
 
 test("GET /api/memories rejects an invalid status filter", async () => {
@@ -160,7 +166,7 @@ test("GET /api/memory/:id/history returns the insert version", async () => {
   assert.equal(history[0].op, "insert");
 });
 
-test("GET /api/provenance/:recall_id returns the recall log entry", async () => {
+test("GET /api/provenance/:recall_id returns the recall log entry joined to current memory content", async () => {
   const scopeId = newUlid();
   await postJson("/api/remember", { scope_id: scopeId, content: "provenance test fact" });
   const recallRes = await postJson("/api/recall", { scope_id: scopeId, query: "provenance test fact" });
@@ -170,12 +176,45 @@ test("GET /api/provenance/:recall_id returns the recall log entry", async () => 
   assert.equal(res.status, 200);
   const entry = await json(res);
   assert.equal(entry.recallId, recallId);
+  assert.ok(entry.results.length > 0);
+  assert.ok(
+    entry.results.some((r: { content: string }) => r.content === "provenance test fact"),
+    "provenance results must join to current memory content"
+  );
 });
 
 test("GET /api/provenance/:recall_id returns 404 for an unknown recall_id", async () => {
   const scopeId = newUlid();
   const res = await app.request(`/api/provenance/${newUlid()}?scope_id=${scopeId}`);
   assert.equal(res.status, 404);
+});
+
+// --- /api/introspect ---------------------------------------------------------
+
+test("GET /api/introspect returns engine stats for a scope", async () => {
+  const scopeId = newUlid();
+  await postJson("/api/remember", { scope_id: scopeId, content: "introspect fact one" });
+  await postJson("/api/remember", { scope_id: scopeId, content: "introspect fact two" });
+  await postJson("/api/recall", { scope_id: scopeId, query: "introspect fact one" });
+
+  const res = await app.request(`/api/introspect?scope_id=${scopeId}`);
+  assert.equal(res.status, 200);
+  const stats = await json(res);
+  assert.equal(stats.counts.byLayer.episodic, 2);
+  assert.equal(stats.counts.byStatus.active, 2);
+  assert.equal(typeof stats.versionsCount, "number");
+  assert.ok(stats.versionsCount >= 2);
+  assert.equal(typeof stats.recallCount, "number");
+  assert.ok(stats.recallCount >= 1);
+  assert.equal(typeof stats.sessionsCount, "number");
+  assert.equal(typeof stats.turnsCount, "number");
+  assert.equal(typeof stats.gcWindowMs, "number");
+  assert.equal(stats.embeddingDim, 1024);
+});
+
+test("GET /api/introspect rejects a malformed scope_id", async () => {
+  const res = await app.request(`/api/introspect?scope_id=${encodeURIComponent("bad scope!")}`);
+  assert.equal(res.status, 400);
 });
 
 // --- /chat -----------------------------------------------------------------

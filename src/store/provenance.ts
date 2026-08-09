@@ -57,6 +57,41 @@ export async function getRecall(scopeId: string, recallId: string): Promise<Reca
   return rowToRecallLog(result.rows[0]);
 }
 
+export interface RecallResultEntryWithContent extends RecallResultEntry {
+  content: string | null;
+}
+
+export interface RecallLogEntryWithContent extends Omit<RecallLogEntry, "results"> {
+  results: RecallResultEntryWithContent[];
+}
+
+/**
+ * getRecall() plus each result row's current memory content (dashboard
+ * provenance panel, plan Step 1: "joins recall_log results to current
+ * memory content"). content is null only if the memory_id has no row left
+ * in `memories` - never expected given this store never hard-deletes, but
+ * the join stays a LEFT JOIN-equivalent (separate lookup + Map) rather than
+ * assuming presence, so a future data situation degrades instead of 500s.
+ * Additive: getRecall() itself is untouched.
+ */
+export async function getRecallWithContent(scopeId: string, recallId: string): Promise<RecallLogEntryWithContent | null> {
+  const recall = await getRecall(scopeId, recallId);
+  if (!recall) return null;
+  if (recall.results.length === 0) return { ...recall, results: [] };
+
+  const memoryIds = recall.results.map((r) => r.memoryId);
+  const contentResult = await getPool().query<{ memory_id: string; content: string }>(
+    `SELECT memory_id, content FROM memories WHERE scope_id = $1 AND memory_id = ANY($2)`,
+    [scopeId, memoryIds]
+  );
+  const contentByMemoryId = new Map(contentResult.rows.map((row) => [row.memory_id, row.content]));
+
+  return {
+    ...recall,
+    results: recall.results.map((r) => ({ ...r, content: contentByMemoryId.get(r.memoryId) ?? null })),
+  };
+}
+
 export interface MemoryVersionEntry {
   scopeId: string;
   versionId: string;
