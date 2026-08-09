@@ -13,15 +13,12 @@ after(async () => {
   await closePool();
 });
 
-// similarityThreshold tuned to the FAKE (character-trigram bag-of-words)
-// embedding's actual distance distribution, measured directly: the 3
-// near-identical budget-meeting variants below sit ~0.33-0.42 L2 apart from
-// the first (seed) variant, while the unrelated sentence sits ~1.33 away -
-// clean separation either side of 0.5. The plan's shipped default (0.35) is
-// tighter than these particular near-duplicate phrasings happen to need;
-// this test picks a threshold matched to its own fixture rather than
-// weakening the shipped default to fit the test.
-const SIMILARITY_THRESHOLD = 0.5;
+// These tests run on the shipped DEFAULT_SIMILARITY_THRESHOLD (0.85,
+// calibrated 2026-08-10 against measured distances in both embedding modes -
+// see consolidate.ts). Under the FAKE trigram embedding the 3 near-identical
+// budget-meeting variants sit ~0.33-0.42 L2 apart (well inside 0.85) and the
+// unrelated sentence sits ~1.33 away (well outside), so the fixture
+// exercises the production default directly with clean separation.
 
 test("sleepScope consolidates 3 near-identical episodics into 1 semantic memory, leaves the unrelated one active", async () => {
   const scopeId = newUlid();
@@ -30,7 +27,7 @@ test("sleepScope consolidates 3 near-identical episodics into 1 semantic memory,
   const budget3 = await rememberMemory({ scopeId, content: "meeting with Dana about the Q3 budget plan" });
   const unrelated = await rememberMemory({ scopeId, content: "the server rack fan is rattling" });
 
-  const result = await sleepScope({ scopeId, similarityThreshold: SIMILARITY_THRESHOLD });
+  const result = await sleepScope({ scopeId });
   assert.equal(result.clusters, 1, "expected exactly 1 cluster to qualify");
   assert.equal(result.consolidated, 3, "expected exactly 3 sources consolidated");
   assert.equal(result.created.length, 1, "expected exactly 1 new semantic memory");
@@ -64,7 +61,7 @@ test("sleepScope lineage: source memory_versions rows record op='consolidate', n
   const src2 = await rememberMemory({ scopeId, content: "meeting with Dana about the Q3 budget numbers" });
   await rememberMemory({ scopeId, content: "the server rack fan is rattling" });
 
-  const result = await sleepScope({ scopeId, similarityThreshold: SIMILARITY_THRESHOLD });
+  const result = await sleepScope({ scopeId });
   const semanticId = result.created[0];
 
   const pool = getPool();
@@ -95,7 +92,7 @@ test("recall no longer returns consolidated sources, but does return the semanti
     await getPool().query<{ memory_id: string }>("SELECT memory_id FROM memories WHERE scope_id = $1", [scopeId])
   ).rows.map((r) => r.memory_id);
 
-  const result = await sleepScope({ scopeId, similarityThreshold: SIMILARITY_THRESHOLD });
+  const result = await sleepScope({ scopeId });
   const semanticId = result.created[0];
 
   const { memories } = await recallMemories({ scopeId, query: "budget meeting with Dana", k: 8 });
@@ -114,11 +111,11 @@ test("sleepScope is idempotent: running it again consolidates nothing further", 
   await rememberMemory({ scopeId, content: "meeting with Dana about the Q3 budget plan" });
   await rememberMemory({ scopeId, content: "the server rack fan is rattling" });
 
-  const first = await sleepScope({ scopeId, similarityThreshold: SIMILARITY_THRESHOLD });
+  const first = await sleepScope({ scopeId });
   assert.equal(first.clusters, 1);
   assert.equal(first.consolidated, 3);
 
-  const second = await sleepScope({ scopeId, similarityThreshold: SIMILARITY_THRESHOLD });
+  const second = await sleepScope({ scopeId });
   assert.equal(second.clusters, 0, "a second run should find no qualifying clusters");
   assert.equal(second.consolidated, 0);
   assert.equal(second.created.length, 0);

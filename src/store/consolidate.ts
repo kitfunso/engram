@@ -23,7 +23,15 @@ export interface SleepScopeResult {
   created: string[];
 }
 
-const DEFAULT_SIMILARITY_THRESHOLD = 0.35;
+// Calibrated against measured L2 distances between unit-normalized embeddings
+// (2026-08-10). Real Titan V2: paraphrase-level near-duplicates land at
+// 0.77-1.0, unrelated content at >=1.3 (measured on the cloud demo seed's
+// coffee facts, closest pair 0.77). Fake trigram embeddings: near-duplicates
+// 0.33-0.42, unrelated >=1.3. The original 0.35 only merged near-exact
+// duplicates under real embeddings (cos >= 0.94) and consolidated nothing in
+// practice; 0.85 merges genuine paraphrases in both modes while keeping a
+// wide margin below the ~1.3 unrelated floor.
+const DEFAULT_SIMILARITY_THRESHOLD = 0.85;
 const DEFAULT_MIN_CLUSTER_SIZE = 2;
 
 function l2(a: number[], b: number[]): number {
