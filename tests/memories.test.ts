@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { closePool, getPool } from "../src/db.js";
 import { embed } from "../src/embeddings.js";
-import { getMemory, rememberMemory, strengthAt } from "../src/store/memories.js";
+import { consolidateSourceTx, getMemory, reinforceMemoryTx, rememberMemory, strengthAt } from "../src/store/memories.js";
 import { newUlid } from "../src/ulid.js";
 
 after(async () => {
@@ -49,6 +49,68 @@ test("rememberMemory writes exactly one memories row and one memory_versions row
   assert.equal(fetched?.strength, 1.0);
   assert.equal(fetched?.halfLifeDays, 30);
   assert.equal(fetched?.retrievalCount, 0);
+});
+
+test("reinforceMemoryTx returns null and writes no version row for a non-active memory", async () => {
+  const scopeId = newUlid();
+  const target = await rememberMemory({ scopeId, content: "consolidation target for reinforce guard test" });
+  const mem = await rememberMemory({ scopeId, content: "already-consolidated memory about kestrels" });
+
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await consolidateSourceTx(client, { scopeId, memoryId: mem.memoryId, consolidatedInto: target.memoryId });
+    await client.query("COMMIT");
+
+    await client.query("BEGIN");
+    const result = await reinforceMemoryTx(client, { scopeId, memoryId: mem.memoryId, now: new Date() });
+    await client.query("COMMIT");
+    assert.equal(result, null, "reinforcing a non-active memory must return null, not throw or fabricate a row");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const versionRows = await pool.query(
+    "SELECT * FROM memory_versions WHERE scope_id = $1 AND memory_id = $2 AND op = 'retrieve_boost'",
+    [scopeId, mem.memoryId]
+  );
+  assert.equal(versionRows.rows.length, 0, "a no-op reinforce must not write a retrieve_boost version row");
+});
+
+test("consolidateSourceTx throws when the source memory is not active", async () => {
+  const scopeId = newUlid();
+  const target = await rememberMemory({ scopeId, content: "consolidation target for consolidate guard test" });
+  const mem = await rememberMemory({ scopeId, content: "already-consolidated memory about otters" });
+
+  const pool = getPool();
+  const firstClient = await pool.connect();
+  try {
+    await firstClient.query("BEGIN");
+    await consolidateSourceTx(firstClient, { scopeId, memoryId: mem.memoryId, consolidatedInto: target.memoryId });
+    await firstClient.query("COMMIT");
+  } catch (err) {
+    await firstClient.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    firstClient.release();
+  }
+
+  const secondClient = await pool.connect();
+  try {
+    await secondClient.query("BEGIN");
+    await assert.rejects(
+      consolidateSourceTx(secondClient, { scopeId, memoryId: mem.memoryId, consolidatedInto: target.memoryId }),
+      /is not active/,
+      "consolidating an already-consolidated memory must throw, not silently write a version row off no matched rows"
+    );
+    await secondClient.query("ROLLBACK");
+  } finally {
+    secondClient.release();
+  }
 });
 
 test("strengthAt matches hand-computed exponential decay values", () => {

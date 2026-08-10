@@ -6,11 +6,11 @@ installed at `%LOCALAPPDATA%\ccloud\ccloud.exe` and can be authed later for CLI 
 
 - Org: kitfunso (free trial, $400 credits)
 - Cluster: `engram`, Basic (serverless), AWS `us-east-1`, unlimited on-demand capacity
-- Cluster ID: `a5a002ed-8cf8-4697-938c-05f1b7cef8e0`
-- Host: `engram-31554.j77.aws-us-east-1.cockroachlabs.cloud:26257`
-- SQL user: `keith` (password in local `.env` only, never committed)
+- Cluster ID: `<cluster-id>`
+- Host: `<cluster-host>:26257`
+- SQL user: `<sql-user>` (password in local `.env` only, never committed)
 - CA cert: `%APPDATA%\postgresql\root.crt` (verify-full), from
-  `https://cockroachlabs.cloud/clusters/a5a002ed-8cf8-4697-938c-05f1b7cef8e0/cert`
+  `https://cockroachlabs.cloud/clusters/<cluster-id>/cert`
 - Database: `engram` (created by `cloud-conn-test.mjs`)
 - Server version: CockroachDB CCL v26.2.5
 - Measured `gc.ttlseconds`: 4500 (75 min) — the AS OF SYSTEM TIME live window
@@ -18,10 +18,10 @@ installed at `%LOCALAPPDATA%\ccloud\ccloud.exe` and can be authed later for CLI 
 ## Managed MCP Server (hackathon CRDB tool)
 
 - URL: `https://cockroachlabs.cloud/mcp` (Streamable HTTP)
-- Required header: `mcp-cluster-id: a5a002ed-8cf8-4697-938c-05f1b7cef8e0`
+- Required header: `mcp-cluster-id: <cluster-id>`
 - Auth: OAuth (browser) or API key
 - Claude Code registration:
-  `claude mcp add cockroachdb-cloud https://cockroachlabs.cloud/mcp --transport http --header "mcp-cluster-id: a5a002ed-8cf8-4697-938c-05f1b7cef8e0"`
+  `claude mcp add cockroachdb-cloud https://cockroachlabs.cloud/mcp --transport http --header "mcp-cluster-id: <cluster-id>"`
 
 ## Spike results
 

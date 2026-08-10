@@ -36,6 +36,10 @@ export interface RecallAsOfInput {
 export interface RecallAsOfResult {
   memories: Memory[];
   usedReplay: boolean;
+  // True when the replay path's version scan hit REPLAY_VERSION_SCAN_LIMIT:
+  // more memory_ids may have had history at T than were reconstructed.
+  // Always false when the fast (AOST) path served the request.
+  truncated: boolean;
 }
 
 /**
@@ -52,17 +56,26 @@ export async function recallAsOf(input: RecallAsOfInput): Promise<RecallAsOfResu
   if (!forceReplay && inWindow) {
     try {
       const memories = await recallAsOfFast(scopeId, query, at, k);
-      return { memories, usedReplay: false };
+      return { memories, usedReplay: false, truncated: false };
     } catch (err) {
       if (!isPastWindowError(err)) throw err;
       // fall through to replay
     }
   }
 
-  const memories = await recallAsOfReplay(scopeId, query, at, k);
-  return { memories, usedReplay: true };
+  const { memories, truncated } = await recallAsOfReplay(scopeId, query, at, k);
+  return { memories, usedReplay: true, truncated };
 }
 
+// Both branches map through strengthAt(memory, at): the memories.strength
+// column holds the raw value written at last mutation (insert=1.0, each
+// retrieve_boost bumps it), not a continuously-decayed value. AS OF SYSTEM
+// TIME returns that raw column exactly as it stood at `at`, so without this
+// step the fast path would report un-decayed strength while
+// recallAsOfReplay (snapshotToMemory) already decays via strengthAt - the
+// two paths would disagree on strength for the identical T. Decaying here
+// makes them report identical values (see tests/timetravel.test.ts's
+// fast-path/forceReplay equivalence test).
 async function recallAsOfFast(scopeId: string, query: string | undefined, at: Date, k: number): Promise<Memory[]> {
   const pool = getPool();
   const clause = aostClause(at);
@@ -77,7 +90,7 @@ async function recallAsOfFast(scopeId: string, query: string | undefined, at: Da
        LIMIT $3`,
       [scopeId, queryVector, k]
     );
-    return result.rows.map(rowToMemory);
+    return result.rows.map(rowToMemory).map((memory) => ({ ...memory, strength: strengthAt(memory, at) }));
   }
 
   const result = await pool.query<MemoryRow>(
@@ -87,7 +100,7 @@ async function recallAsOfFast(scopeId: string, query: string | undefined, at: Da
      LIMIT $2`,
     [scopeId, k]
   );
-  return result.rows.map(rowToMemory);
+  return result.rows.map(rowToMemory).map((memory) => ({ ...memory, strength: strengthAt(memory, at) }));
 }
 
 interface VersionRow {
@@ -95,6 +108,11 @@ interface VersionRow {
   op: string;
   snapshot: Record<string, unknown>;
 }
+
+// Bounds the replay path's version scan (cost ceiling on a public,
+// unauthenticated endpoint - a scope with unbounded memory_versions history
+// must not turn one /api/recall?as_of=... request into an unbounded scan).
+const REPLAY_VERSION_SCAN_LIMIT = 2000;
 
 /**
  * Reconstructs Memory objects from a memory_versions snapshot: no stored
@@ -130,16 +148,27 @@ function snapshotToMemory(memoryId: string, snapshot: Record<string, unknown>, e
  * its snapshot.status is 'active'. Embeddings are joined from the current
  * memories table (see snapshotToMemory); ranking mirrors recallMemories'
  * shape (vector order when a query is given, else last_retrieved_at DESC).
+ * `version_id DESC` is a deterministic tiebreak for `at DESC`: memory_versions
+ * rows can share the same HLC timestamp under concurrent writes, and
+ * DISTINCT ON's "latest" pick must be stable across runs rather than
+ * depending on incidental row order.
  */
-async function recallAsOfReplay(scopeId: string, query: string | undefined, at: Date, k: number): Promise<Memory[]> {
+async function recallAsOfReplay(
+  scopeId: string,
+  query: string | undefined,
+  at: Date,
+  k: number
+): Promise<{ memories: Memory[]; truncated: boolean }> {
   const pool = getPool();
   const versionsResult = await pool.query<VersionRow>(
     `SELECT DISTINCT ON (memory_id) memory_id, op, snapshot
      FROM memory_versions
      WHERE scope_id = $1 AND at <= $2
-     ORDER BY memory_id, at DESC`,
-    [scopeId, at]
+     ORDER BY memory_id, at DESC, version_id DESC
+     LIMIT $3`,
+    [scopeId, at, REPLAY_VERSION_SCAN_LIMIT]
   );
+  const truncated = versionsResult.rows.length >= REPLAY_VERSION_SCAN_LIMIT;
 
   const liveMemoryIds: string[] = [];
   const snapshots = new Map<string, Record<string, unknown>>();
@@ -149,7 +178,7 @@ async function recallAsOfReplay(scopeId: string, query: string | undefined, at: 
     liveMemoryIds.push(row.memory_id);
     snapshots.set(row.memory_id, row.snapshot);
   }
-  if (liveMemoryIds.length === 0) return [];
+  if (liveMemoryIds.length === 0) return { memories: [], truncated };
 
   const embeddingRows = await pool.query<{ memory_id: string; embedding: string }>(
     `SELECT memory_id, embedding FROM memories WHERE scope_id = $1 AND memory_id = ANY($2)`,
@@ -171,7 +200,7 @@ async function recallAsOfReplay(scopeId: string, query: string | undefined, at: 
     reconstructed.sort((a, b) => b.lastRetrievedAt.getTime() - a.lastRetrievedAt.getTime());
   }
 
-  return reconstructed.slice(0, k);
+  return { memories: reconstructed.slice(0, k), truncated };
 }
 
 function l2(a: number[], b: number[]): number {

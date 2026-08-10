@@ -45,6 +45,7 @@ test("recallAsOf (forceReplay) reconstructs 3 historical states: insert, retriev
 
   const atT1 = await recallAsOf({ scopeId, at: t1, forceReplay: true });
   assert.equal(atT1.usedReplay, true);
+  assert.equal(atT1.truncated, false, "well under REPLAY_VERSION_SCAN_LIMIT, must not report truncation");
   const foundAtT1 = atT1.memories.find((m) => m.memoryId === mem.memoryId);
   assert.ok(foundAtT1, "memory should exist and be active at T1 (right after insert)");
   assert.equal(foundAtT1?.retrievalCount, 0);
@@ -68,10 +69,32 @@ test("recallAsOf fast path (AOST) returns correct recent state when in-window", 
 
   const result = await recallAsOf({ scopeId, query: "kestrels", at });
   assert.equal(result.usedReplay, false, "expected the fast AOST path for a just-committed, in-window T");
+  assert.equal(result.truncated, false, "the fast path never truncates");
   const found = result.memories.find((m) => m.memoryId === mem.memoryId);
   assert.ok(found, "expected the memory to be found via the fast path");
   assert.equal(found?.content, "aost fast path probe about kestrels");
   assert.equal(found?.status, "active");
+});
+
+test("recallAsOf fast path and forceReplay report identical as-of-T strength for the same T", async () => {
+  const scopeId = newUlid();
+  const mem = await rememberMemory({ scopeId, content: "equivalence probe memory about comets" });
+  await recallMemories({ scopeId, query: "comets", k: 8 }); // writes an op=retrieve_boost, bumping strength
+  const at = await dbNow(); // in-window T, after the boost commits
+
+  const fast = await recallAsOf({ scopeId, query: "comets", at, forceReplay: false });
+  assert.equal(fast.usedReplay, false, "expected the fast AOST path for this in-window T");
+  const replay = await recallAsOf({ scopeId, query: "comets", at, forceReplay: true });
+  assert.equal(replay.usedReplay, true);
+
+  const fastMem = fast.memories.find((m) => m.memoryId === mem.memoryId);
+  const replayMem = replay.memories.find((m) => m.memoryId === mem.memoryId);
+  assert.ok(fastMem, "expected the memory via the fast path");
+  assert.ok(replayMem, "expected the memory via replay");
+  assert.ok(
+    Math.abs(fastMem!.strength - replayMem!.strength) < 1e-9,
+    `expected equal as-of-T strength between fast and replay paths, fast=${fastMem!.strength} replay=${replayMem!.strength}`
+  );
 });
 
 test("recallAsOf falls back to replay (not a throw) when T predates the database's own history", async () => {

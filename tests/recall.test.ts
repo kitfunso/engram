@@ -91,6 +91,47 @@ test("recall_log row is written and its results match the returned memory set ex
   assert.deepEqual(loggedIds, returnedIds, "recall_log results must match the returned memory set exactly");
 });
 
+test("recall drops a candidate that becomes consolidated mid-recall instead of 500ing", async () => {
+  // Simulates the race reinforceMemoryTx's status='active' guard exists for:
+  // a memory selected as a recall candidate gets consolidated by a
+  // concurrent sleepScope run before recallMemories' own reinforcement
+  // UPDATE lands. Forced deterministically (not by timing) via CockroachDB's
+  // write-write blocking: an open, uncommitted consolidating transaction
+  // holds a write intent on the row, so recallMemories' own UPDATE ... SET
+  // ... WHERE status = 'active' blocks until we commit below, at which point
+  // it sees status='consolidated' and affects 0 rows.
+  const scopeId = newUlid();
+  const target = await rememberMemory({ scopeId, content: "race probe consolidation target" });
+  const mem = await rememberMemory({ scopeId, content: "race probe memory about tigers" });
+
+  const pool = getPool();
+  const client = await pool.connect();
+  await client.query("BEGIN");
+  await client.query("UPDATE memories SET status = 'consolidated', consolidated_into = $3 WHERE scope_id = $1 AND memory_id = $2", [
+    scopeId,
+    mem.memoryId,
+    target.memoryId,
+  ]);
+
+  const recallPromise = recallMemories({ scopeId, query: "tigers", k: 8 });
+  // Give recallMemories time to select `mem` as a candidate (sees it as
+  // still 'active', since our UPDATE above hasn't committed) and then block
+  // on its own reinforcement UPDATE against the same row.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  await client.query("COMMIT");
+  client.release();
+
+  const { recallId, memories } = await recallPromise;
+  assert.ok(!memories.some((m) => m.memoryId === mem.memoryId), "the consolidated-mid-recall memory must not appear in results");
+
+  const recall = await getRecall(scopeId, recallId);
+  assert.ok(recall);
+  assert.ok(
+    !recall!.results.some((r) => r.memoryId === mem.memoryId),
+    "the consolidated-mid-recall memory must not appear in the recall_log row either"
+  );
+});
+
 test("consolidated memories are never returned by recall", async () => {
   const scopeId = newUlid();
   const mem = await rememberMemory({ scopeId, content: "soon to be consolidated memory about badgers" });
@@ -139,7 +180,7 @@ test("recall SQL EXPLAIN at ~300 rows: logs whether the vector index survives th
     [scopeId, queryVector, 24]
   );
   const planText = plan.rows.map((row) => row.info).join("\n");
-  const usesVectorIndex = /memories_scope_embedding_idx|vector/i.test(planText);
+  const usesVectorIndex = /memories_scope_status_embedding_idx|vector/i.test(planText);
   // recallMemories' real SQL shape adds `status = 'active'` on top of the
   // (scope_id, embedding) index prefix - this may change planner behavior
   // vs the scope_id-only shape tested in tests/memories.test.ts. LOGGED per

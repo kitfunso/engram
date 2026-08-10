@@ -20,7 +20,7 @@ import { recallAsOf } from "../store/timetravel.js";
 import { sleepScope } from "../store/consolidate.js";
 import { getMemoryHistory, getRecallWithContent } from "../store/provenance.js";
 import { getIntrospectStats } from "../store/introspect.js";
-import { createSession } from "../store/sessions.js";
+import { createSession, sessionExists } from "../store/sessions.js";
 import {
   MAX_CONTENT_LEN,
   MAX_QUERY_LEN,
@@ -85,7 +85,20 @@ app.post("/chat", async (c) => {
   const body = await readJsonBody(c);
   const scopeId = requireId(body.scope_id, "scope_id");
   const message = requireText(body.message, "message", MAX_CONTENT_LEN);
-  const sessionId = body.session_id !== undefined ? requireId(body.session_id, "session_id") : await createSession(scopeId);
+
+  let sessionId: string;
+  if (body.session_id !== undefined) {
+    sessionId = requireId(body.session_id, "session_id");
+    // Verified up front, before handleChat runs: an unknown session_id
+    // would otherwise only surface as an FK violation on the turn INSERT at
+    // the end of handleChat, after its recall/chat/extraction side effects
+    // (including new memories written by extraction) already landed.
+    if (!(await sessionExists(scopeId, sessionId))) {
+      badRequest("session_id not found for this scope");
+    }
+  } else {
+    sessionId = await createSession(scopeId);
+  }
 
   const result = await handleChat({ scopeId, sessionId, message });
   return c.json({
@@ -116,7 +129,7 @@ app.post("/api/recall", async (c) => {
 
   if (asOf) {
     const result = await recallAsOf({ scopeId, query, at: asOf, k });
-    return c.json({ memories: result.memories.map(toApiMemory), usedReplay: result.usedReplay });
+    return c.json({ memories: result.memories.map(toApiMemory), usedReplay: result.usedReplay, truncated: result.truncated });
   }
   const result = await recallMemories({ scopeId, query, k });
   return c.json({ recallId: result.recallId, memories: result.memories.map(toApiMemory) });

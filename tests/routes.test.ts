@@ -77,6 +77,38 @@ test("POST /api/remember rejects content over the length cap", async () => {
   assert.equal(res.status, 400);
 });
 
+test("POST /api/remember rejects more than 16 tags", async () => {
+  const scopeId = newUlid();
+  const res = await postJson("/api/remember", {
+    scope_id: scopeId,
+    content: "x",
+    tags: Array.from({ length: 17 }, (_, i) => `tag${i}`),
+  });
+  assert.equal(res.status, 400);
+});
+
+test("POST /api/remember rejects a non-string tag", async () => {
+  const scopeId = newUlid();
+  const res = await postJson("/api/remember", { scope_id: scopeId, content: "x", tags: ["ok", 42] });
+  assert.equal(res.status, 400);
+});
+
+test("POST /api/remember rejects tags whose JSON exceeds the size cap", async () => {
+  const scopeId = newUlid();
+  const res = await postJson("/api/remember", { scope_id: scopeId, content: "x", tags: ["a".repeat(1100)] });
+  assert.equal(res.status, 400);
+});
+
+test("POST /api/remember accepts exactly 16 short string tags", async () => {
+  const scopeId = newUlid();
+  const res = await postJson("/api/remember", {
+    scope_id: scopeId,
+    content: "x",
+    tags: Array.from({ length: 16 }, (_, i) => `tag${i}`),
+  });
+  assert.equal(res.status, 200);
+});
+
 // --- /api/recall ---------------------------------------------------------------
 
 test("POST /api/recall returns the remembered memory for a matching query", async () => {
@@ -106,6 +138,7 @@ test("POST /api/recall with as_of routes to a historical (timetravel) read", asy
   assert.equal(res.status, 200);
   const body = await json(res);
   assert.equal(typeof body.usedReplay, "boolean");
+  assert.equal(typeof body.truncated, "boolean");
   assert.ok(Array.isArray(body.memories));
 });
 
@@ -121,6 +154,13 @@ test("POST /api/recall rejects a malformed as_of", async () => {
   assert.equal(res.status, 400);
 });
 
+test("POST /api/recall rejects an as_of timestamp in the future", async () => {
+  const scopeId = newUlid();
+  const future = new Date(Date.now() + 60_000).toISOString();
+  const res = await postJson("/api/recall", { scope_id: scopeId, query: "x", as_of: future });
+  assert.equal(res.status, 400);
+});
+
 // --- /api/sleep -----------------------------------------------------------------
 
 test("POST /api/sleep returns a consolidation result", async () => {
@@ -131,6 +171,8 @@ test("POST /api/sleep returns a consolidation result", async () => {
   assert.equal(typeof body.clusters, "number");
   assert.equal(typeof body.consolidated, "number");
   assert.ok(Array.isArray(body.created));
+  assert.equal(body.candidatesTruncated, false, "a fresh scope is well under MAX_CANDIDATES");
+  assert.equal(body.clustersSkipped, 0, "a fresh scope has no clusters to skip");
 });
 
 // --- /api/memories, /api/memory/:id/history, /api/provenance/:recall_id -------
@@ -254,4 +296,22 @@ test("POST /chat rejects a malformed session_id when provided", async () => {
   const scopeId = newUlid();
   const res = await postJson("/chat", { scope_id: scopeId, message: "hi", session_id: "not a valid id!" });
   assert.equal(res.status, 400);
+});
+
+test("POST /chat rejects a well-formed but unknown session_id before any extraction side effects run", async () => {
+  const scopeId = newUlid();
+  const res = await postJson("/chat", { scope_id: scopeId, message: "remember: this must never be written", session_id: newUlid() });
+  assert.equal(res.status, 400);
+
+  // Confirms extraction never ran: no memory exists for this fresh scope.
+  const memoriesRes = await app.request(`/api/memories?scope_id=${scopeId}`);
+  const memories = await json(memoriesRes);
+  assert.equal(memories.length, 0, "an unknown session_id must be rejected before handleChat's side effects run");
+});
+
+test("POST /chat accepts a session_id created via a prior /chat call", async () => {
+  const scopeId = newUlid();
+  const first = await json(await postJson("/chat", { scope_id: scopeId, message: "hello" }));
+  const res = await postJson("/chat", { scope_id: scopeId, message: "hello again", session_id: first.session_id });
+  assert.equal(res.status, 200);
 });

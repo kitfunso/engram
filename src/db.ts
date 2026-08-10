@@ -160,6 +160,14 @@ export function getPool(): PgPool {
   if (!pool) {
     const config = process.env.ENGRAM_TARGET === "cloud" ? buildCloudPoolConfig() : buildLocalPoolConfig();
     pool = new Pool(config);
+    // pg emits 'error' on an idle client whose connection drops server-side
+    // (network blip, CRDB node restart) - node-postgres's own docs call this
+    // out as required: an unhandled 'error' on the Pool is an uncaught
+    // exception that crashes the process. Logged, not rethrown; the next
+    // getPool().query()/connect() call gets a fresh client from the pool.
+    pool.on("error", (err) => {
+      console.error("[db] idle pool client error:", err instanceof Error ? err.message : String(err));
+    });
   }
   return pool;
 }
@@ -179,8 +187,14 @@ export async function closePool(): Promise<void> {
 // previously carried a test-only rememberWithRetry wrapper for exactly this
 // error class, observed on vector-index writes during bulk inserts; this is
 // the root-cause fix, in the write paths themselves rather than in tests.
+// Also matches connection-drop patterns (ECONNRESET, pg's own "Connection
+// terminated" client error, CRDB's "server closed the connection" on a
+// killed node) - these are exactly the errors a fresh pool.connect() (now
+// acquired INSIDE withTransientRetry's closure at every call site, not
+// once outside it) can recover from by getting a healthy connection.
 const TRANSIENT_SQLSTATE = "40001";
-const TRANSIENT_MESSAGE_RE = /WriteTooOldError|TransactionRetryWithProtoRefreshError|restart transaction/i;
+const TRANSIENT_MESSAGE_RE =
+  /WriteTooOldError|TransactionRetryWithProtoRefreshError|restart transaction|ECONNRESET|Connection terminated|server closed the connection/i;
 const MAX_ATTEMPTS = 4;
 const BACKOFF_MIN_MS = 25;
 const BACKOFF_MAX_MS = 100;

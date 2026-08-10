@@ -71,9 +71,17 @@ export function optionalStatus(value: unknown): MemoryStatusFilter | undefined {
   return value as MemoryStatusFilter;
 }
 
+export const MAX_TAGS = 16;
+export const MAX_TAGS_JSON_LEN = 1024;
+
 export function optionalTags(value: unknown): unknown[] | undefined {
   if (value === undefined || value === null) return undefined;
   if (!Array.isArray(value)) badRequest("tags must be an array");
+  if (value.length > MAX_TAGS) badRequest(`tags must have at most ${MAX_TAGS} elements`);
+  if (!value.every((tag) => typeof tag === "string")) badRequest("tags must be an array of strings");
+  if (JSON.stringify(value).length > MAX_TAGS_JSON_LEN) {
+    badRequest(`tags must serialize to at most ${MAX_TAGS_JSON_LEN} JSON characters`);
+  }
   return value as unknown[];
 }
 
@@ -82,5 +90,6 @@ export function parseAsOf(value: unknown): Date | undefined {
   if (typeof value !== "string") badRequest("as_of must be an ISO date string");
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) badRequest("as_of must be a valid date");
+  if (date.getTime() > Date.now()) badRequest("as_of must not be in the future");
   return date;
 }

@@ -177,25 +177,31 @@ export async function rememberMemory(input: RememberInput): Promise<Memory> {
   const embedding = await embed(content);
   const memoryId = newUlid();
 
-  const client = await getPool().connect();
   try {
+    // pool.connect() lives INSIDE the retried closure (not acquired once
+    // outside it): a transient error can mean the connection itself is dead
+    // (ECONNRESET / "Connection terminated"), so a retry must get a fresh
+    // connection from the pool, not replay BEGIN on the same broken client.
     return await withTransientRetry(async () => {
-      await client.query("BEGIN");
+      const client = await getPool().connect();
       try {
-        await client.query("INSERT INTO scopes (scope_id) VALUES ($1) ON CONFLICT DO NOTHING", [scopeId]);
-        const memory = await insertMemoryTx(client, { scopeId, memoryId, content, embedding, layer, tags, origin });
-        await client.query("COMMIT");
-        return memory;
-      } catch (err) {
-        await client.query("ROLLBACK").catch(() => {});
-        throw err;
+        await client.query("BEGIN");
+        try {
+          await client.query("INSERT INTO scopes (scope_id) VALUES ($1) ON CONFLICT DO NOTHING", [scopeId]);
+          const memory = await insertMemoryTx(client, { scopeId, memoryId, content, embedding, layer, tags, origin });
+          await client.query("COMMIT");
+          return memory;
+        } catch (err) {
+          await client.query("ROLLBACK").catch(() => {});
+          throw err;
+        }
+      } finally {
+        client.release();
       }
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`rememberMemory: failed for scope ${scopeId}: ${message}`);
-  } finally {
-    client.release();
   }
 }
 
@@ -219,19 +225,23 @@ export interface ReinforceMemoryTxInput {
  * Retrieval reinforcement: bumps retrieval_count/last_retrieved_at/strength
  * and writes an op='retrieve_boost' version row, on a caller-managed
  * client/transaction (recallMemories shares this transaction with its
- * recall_log write).
+ * recall_log write). Guarded by status = 'active': a memory selected as a
+ * recall candidate can be consolidated by a concurrent sleepScope run before
+ * this UPDATE lands. Returns null (rather than throwing) in that case -
+ * recallMemories treats a null as "drop this candidate", not a 500.
  */
-export async function reinforceMemoryTx(client: PoolClient, input: ReinforceMemoryTxInput): Promise<Memory> {
+export async function reinforceMemoryTx(client: PoolClient, input: ReinforceMemoryTxInput): Promise<Memory | null> {
   const { scopeId, memoryId, now } = input;
   const updateResult = await client.query<MemoryRow>(
     `UPDATE memories
      SET retrieval_count = retrieval_count + 1,
          last_retrieved_at = $3,
          strength = LEAST(strength + 0.1, 2.0)
-     WHERE scope_id = $1 AND memory_id = $2
+     WHERE scope_id = $1 AND memory_id = $2 AND status = 'active'
      RETURNING ${MEMORY_COLUMNS}`,
     [scopeId, memoryId, now]
   );
+  if (updateResult.rows.length === 0) return null;
   const memory = rowToMemory(updateResult.rows[0]);
   await writeVersion(client, scopeId, memoryId, "retrieve_boost", memory);
   return memory;
@@ -248,16 +258,25 @@ export interface ConsolidateSourceTxInput {
  * consolidated_into) and writes an op='consolidate' version row, on a
  * caller-managed client/transaction (consolidate.ts calls this once per
  * source inside the same transaction as the cluster's new semantic memory).
+ * Guarded by status = 'active': consolidating an already-consolidated (or
+ * deleted, or nonexistent) memory is a caller bug, not a silent no-op - it
+ * throws rather than writing a version row off a row that RETURNING never
+ * found.
  */
 export async function consolidateSourceTx(client: PoolClient, input: ConsolidateSourceTxInput): Promise<Memory> {
   const { scopeId, memoryId, consolidatedInto } = input;
   const updateResult = await client.query<MemoryRow>(
     `UPDATE memories
      SET status = 'consolidated', consolidated_into = $3
-     WHERE scope_id = $1 AND memory_id = $2
+     WHERE scope_id = $1 AND memory_id = $2 AND status = 'active'
      RETURNING ${MEMORY_COLUMNS}`,
     [scopeId, memoryId, consolidatedInto]
   );
+  if (updateResult.rows.length === 0) {
+    throw new Error(
+      `consolidateSourceTx: memory ${memoryId} in scope ${scopeId} is not active (already consolidated/deleted, or does not exist)`
+    );
+  }
   const memory = rowToMemory(updateResult.rows[0]);
   await writeVersion(client, scopeId, memoryId, "consolidate", memory);
   return memory;
@@ -318,45 +337,56 @@ interface ReinforceAndLogInput {
  * transaction, so the log always matches exactly what recallMemories
  * returns. strength_at_recall logs the decayed strength USED to rank (as of
  * the moment of recall, before this recall's own reinforcement side effect)
- * - "what did the agent know", not the post-boost value.
+ * - "what did the agent know", not the post-boost value. A candidate whose
+ * reinforceMemoryTx returns null (consolidated by a concurrent sleepScope
+ * run between candidate selection and this UPDATE) is dropped here, from
+ * both the returned Memory[] and the recall_log row - a memory that stopped
+ * being active mid-recall is a benign race, not a 500.
  */
 async function reinforceAndLog(pool: Pool, input: ReinforceAndLogInput): Promise<Memory[]> {
   const { scopeId, recallId, query, queryEmbedding, top, now } = input;
-  const client = await pool.connect();
   try {
+    // pool.connect() lives INSIDE the retried closure (not acquired once
+    // outside it): a transient error can mean the connection itself is dead
+    // (ECONNRESET / "Connection terminated"), so a retry must get a fresh
+    // connection from the pool, not replay BEGIN on the same broken client.
     return await withTransientRetry(async () => {
-      await client.query("BEGIN");
+      const client = await pool.connect();
       try {
-        const boosted: ScoredCandidate[] = [];
-        for (const item of top) {
-          const memory = await reinforceMemoryTx(client, { scopeId, memoryId: item.memory.memoryId, now });
-          boosted.push({ ...item, memory });
+        await client.query("BEGIN");
+        try {
+          const boosted: ScoredCandidate[] = [];
+          for (const item of top) {
+            const memory = await reinforceMemoryTx(client, { scopeId, memoryId: item.memory.memoryId, now });
+            if (memory === null) continue;
+            boosted.push({ ...item, memory });
+          }
+
+          const results = boosted.map((b) => ({
+            memory_id: b.memory.memoryId,
+            distance: b.distance,
+            strength_at_recall: b.strength,
+            score: b.score,
+          }));
+          await client.query(
+            `INSERT INTO recall_log (scope_id, recall_id, query_text, query_embedding_hash, results)
+             VALUES ($1, $2, $3, $4, $5::jsonb)`,
+            [scopeId, recallId, query, hashEmbedding(queryEmbedding), JSON.stringify(results)]
+          );
+
+          await client.query("COMMIT");
+          return boosted.map((b) => b.memory);
+        } catch (err) {
+          await client.query("ROLLBACK").catch(() => {});
+          throw err;
         }
-
-        const results = boosted.map((b) => ({
-          memory_id: b.memory.memoryId,
-          distance: b.distance,
-          strength_at_recall: b.strength,
-          score: b.score,
-        }));
-        await client.query(
-          `INSERT INTO recall_log (scope_id, recall_id, query_text, query_embedding_hash, results)
-           VALUES ($1, $2, $3, $4, $5::jsonb)`,
-          [scopeId, recallId, query, hashEmbedding(queryEmbedding), JSON.stringify(results)]
-        );
-
-        await client.query("COMMIT");
-        return boosted.map((b) => b.memory);
-      } catch (err) {
-        await client.query("ROLLBACK").catch(() => {});
-        throw err;
+      } finally {
+        client.release();
       }
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`recallMemories: failed for scope ${scopeId}: ${message}`);
-  } finally {
-    client.release();
   }
 }
 

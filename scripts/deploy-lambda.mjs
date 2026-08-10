@@ -16,6 +16,7 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
@@ -30,10 +31,17 @@ const ROLE_NAME = "engram-lambda-role";
 const RUNTIME_CANDIDATES = ["nodejs22.x", "nodejs20.x"];
 const MEMORY_MB = 512;
 const TIMEOUT_S = 30;
+// Cost ceiling on the public, unauthenticated Function URL - caps concurrent
+// executions so no single traffic spike (or abuse) can run up an unbounded
+// Bedrock/CockroachDB bill.
+const RESERVED_CONCURRENCY = 5;
 
-const scratchDir =
-  process.env.ENGRAM_SCRATCH_DIR ??
-  "C:\\Users\\skf_s\\AppData\\Local\\Temp\\claude\\C--Users-skf-s\\d8b09ccb-3d50-41d7-8443-52b79618ec1a\\scratchpad";
+// A fresh, uniquely-named temp dir per run (never a fixed, committed path -
+// this repo is public, and a hardcoded path under one user's profile is both
+// a minor info leak and wrong on any other machine). Cleaned up in main()'s
+// finally block, but only when this script created it itself.
+const ownScratchDir = process.env.ENGRAM_SCRATCH_DIR === undefined;
+const scratchDir = process.env.ENGRAM_SCRATCH_DIR ?? fs.mkdtempSync(path.join(os.tmpdir(), "engram-"));
 
 function log(msg) {
   console.log(`[deploy-lambda] ${msg}`);
@@ -384,6 +392,29 @@ async function ensureFunctionUrl() {
   return { ok: true, functionUrl };
 }
 
+// --- Step E: reserved concurrency (cost ceiling) ----------------------------
+// Idempotent: reads the current value first and only calls put-function-
+// concurrency when it differs from RESERVED_CONCURRENCY.
+async function ensureReservedConcurrency() {
+  const get = aws(["lambda", "get-function-concurrency", "--function-name", FUNCTION_NAME, "--output", "json"]);
+  const current = get.ok ? JSON.parse(get.stdout).ReservedConcurrentExecutions : undefined;
+  if (current === RESERVED_CONCURRENCY) {
+    log(`reserved concurrency already set to ${RESERVED_CONCURRENCY}`);
+    return { ok: true };
+  }
+  log(`setting reserved concurrency to ${RESERVED_CONCURRENCY} (cost ceiling)...`);
+  const put = aws([
+    "lambda",
+    "put-function-concurrency",
+    "--function-name",
+    FUNCTION_NAME,
+    "--reserved-concurrent-executions",
+    String(RESERVED_CONCURRENCY),
+  ]);
+  if (!put.ok) return { ok: false, deniedReason: put.stderr };
+  return { ok: true };
+}
+
 // --- main --------------------------------------------------------------------
 async function main() {
   const env = readDotEnv();
@@ -394,44 +425,56 @@ async function main() {
     return;
   }
 
-  const zipPath = await bundle();
+  try {
+    const zipPath = await bundle();
 
-  const role = await ensureRole();
-  if (!role.ok) {
-    console.error("[deploy-lambda] IAM step DENIED:");
-    console.error(role.deniedReason);
-    console.error(
-      "\nOperator TODO (run manually with sufficient IAM permissions, or grant the h0 profile " +
-        "iam:CreateRole / iam:AttachRolePolicy / iam:PutRolePolicy / iam:GetRole):\n" +
-        `  1. Create role ${ROLE_NAME} trusting lambda.amazonaws.com\n` +
-        "  2. Attach managed policy arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole\n" +
-        "  3. Put an inline policy allowing bedrock:InvokeModel + bedrock:InvokeModelWithResponseStream on Resource *\n" +
-        "  4. Re-run: node scripts/deploy-lambda.mjs"
-    );
-    process.exitCode = 1;
-    return;
+    const role = await ensureRole();
+    if (!role.ok) {
+      console.error("[deploy-lambda] IAM step DENIED:");
+      console.error(role.deniedReason);
+      console.error(
+        "\nOperator TODO (run manually with sufficient IAM permissions, or grant the h0 profile " +
+          "iam:CreateRole / iam:AttachRolePolicy / iam:PutRolePolicy / iam:GetRole):\n" +
+          `  1. Create role ${ROLE_NAME} trusting lambda.amazonaws.com\n` +
+          "  2. Attach managed policy arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole\n" +
+          "  3. Put an inline policy allowing bedrock:InvokeModel + bedrock:InvokeModelWithResponseStream on Resource *\n" +
+          "  4. Re-run: node scripts/deploy-lambda.mjs"
+      );
+      process.exitCode = 1;
+      return;
+    }
+    log(`role ready: ${role.roleArn}`);
+
+    const fn = await ensureFunction(role.roleArn, role.created, zipPath, cloudDbUrl);
+    if (!fn.ok) {
+      console.error("[deploy-lambda] Lambda function step FAILED:");
+      console.error(fn.deniedReason);
+      process.exitCode = 1;
+      return;
+    }
+    log(`function ready (created=${fn.created})`);
+
+    const url = await ensureFunctionUrl();
+    if (!url.ok) {
+      console.error("[deploy-lambda] Function URL step FAILED:");
+      console.error(url.deniedReason);
+      process.exitCode = 1;
+      return;
+    }
+
+    const concurrency = await ensureReservedConcurrency();
+    if (!concurrency.ok) {
+      console.error("[deploy-lambda] reserved concurrency step FAILED:");
+      console.error(concurrency.deniedReason);
+      process.exitCode = 1;
+      return;
+    }
+
+    console.log(`\nFUNCTION_URL=${url.functionUrl}`);
+    log("deploy complete");
+  } finally {
+    if (ownScratchDir) fs.rmSync(scratchDir, { recursive: true, force: true });
   }
-  log(`role ready: ${role.roleArn}`);
-
-  const fn = await ensureFunction(role.roleArn, role.created, zipPath, cloudDbUrl);
-  if (!fn.ok) {
-    console.error("[deploy-lambda] Lambda function step FAILED:");
-    console.error(fn.deniedReason);
-    process.exitCode = 1;
-    return;
-  }
-  log(`function ready (created=${fn.created})`);
-
-  const url = await ensureFunctionUrl();
-  if (!url.ok) {
-    console.error("[deploy-lambda] Function URL step FAILED:");
-    console.error(url.deniedReason);
-    process.exitCode = 1;
-    return;
-  }
-
-  console.log(`\nFUNCTION_URL=${url.functionUrl}`);
-  log("deploy complete");
 }
 
 main().catch((err) => {

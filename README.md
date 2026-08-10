@@ -51,6 +51,7 @@ returns `400 {"error": "..."}`.
 | GET | `/api/memories?scope_id=&status=&layer=&q=` | query params | list of memories, each with `strengthNow` |
 | GET | `/api/memory/:id/history?scope_id=` | query param | version history for one memory |
 | GET | `/api/provenance/:recall_id?scope_id=` | query param | the recall_log entry a reply was built from |
+| GET | `/api/introspect?scope_id=` | query param | engine stats: counts by layer/status, version/recall/session/turn totals, GC window |
 | GET | `/dashboard` | - | `public/dashboard.html` |
 | GET | `/health` | - | `{ok: true}` |
 
@@ -124,8 +125,8 @@ cluster, no engram code involved.
 | MCP wrapper (this repo's server) | `src/mcp/server.ts` | SHIPPED |
 | CockroachDB Cloud Managed MCP Server | Cluster introspection, see [CockroachDB Cloud Managed MCP Server](#cockroachdb-cloud-managed-mcp-server) | registered |
 | ccloud CLI | Ops/setup | optional |
-| Amazon Bedrock - Titan Text Embeddings V2 + Claude | `src/embeddings.ts`, `src/llm.ts` | fake mode shipped, real path phase 2 |
-| AWS Lambda | Deploy | phase 4 |
+| Amazon Bedrock - Titan Text Embeddings V2 + Claude | `src/embeddings.ts`, `src/llm.ts` | SHIPPED |
+| AWS Lambda | Deploy | SHIPPED |
 
 ## Disclosure
 

@@ -59,11 +59,11 @@ if (!useLocal) {
 
 const { rememberMemory, recallMemories } = await import("../src/store/memories.js");
 const { createSession, appendTurn } = await import("../src/store/sessions.js");
-const { sleepScope } = await import("../src/store/consolidate.js");
+const { sleepScope, DEFAULT_SIMILARITY_THRESHOLD } = await import("../src/store/consolidate.js");
 const { closePool } = await import("../src/db.js");
 
 const SCOPE_ID = "demo";
-const CONSOLIDATE_THRESHOLD = 0.35; // src/store/consolidate.ts's DEFAULT_SIMILARITY_THRESHOLD
+const CONSOLIDATE_THRESHOLD = DEFAULT_SIMILARITY_THRESHOLD; // src/store/consolidate.ts's shipped default (0.85)
 
 // Fictional persona story arc: identity, dog, job, city, project, and a
 // cluster of near-duplicate coffee-order facts meant to consolidate into one

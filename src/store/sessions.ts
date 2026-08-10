@@ -69,6 +69,22 @@ export async function createSession(scopeId: string): Promise<string> {
   return sessionId;
 }
 
+/**
+ * Checks whether a (scopeId, sessionId) session row exists. Used by
+ * src/agent/routes.ts's POST /chat to reject an unknown session_id up
+ * front, before handleChat runs its recall/chat/extraction side effects -
+ * otherwise a bad session_id only surfaces as an FK violation on the turn
+ * INSERT at the very end, after those side effects (including new memories
+ * written by extraction) have already landed.
+ */
+export async function sessionExists(scopeId: string, sessionId: string): Promise<boolean> {
+  const result = await getPool().query("SELECT 1 FROM sessions WHERE scope_id = $1 AND session_id = $2", [
+    scopeId,
+    sessionId,
+  ]);
+  return result.rows.length > 0;
+}
+
 export interface AppendTurnInput {
   scopeId: string;
   sessionId: string;

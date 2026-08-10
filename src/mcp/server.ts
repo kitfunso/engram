@@ -110,7 +110,7 @@ export function createMcpServer(): McpServer {
       const at = parseAsOf(args.as_of);
       if (!at) throw new Error("as_of must be a valid ISO date string");
       const result = await recallAsOf({ scopeId, query, at, k });
-      return jsonResult({ memories: result.memories.map(stripEmbedding), used_replay: result.usedReplay });
+      return jsonResult({ memories: result.memories.map(stripEmbedding), used_replay: result.usedReplay, truncated: result.truncated });
     }
   );
 

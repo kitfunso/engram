@@ -21,6 +21,14 @@ export interface SleepScopeResult {
   clusters: number;
   consolidated: number;
   created: string[];
+  // True when the candidate query hit MAX_CANDIDATES: more active episodic
+  // memories may exist than were considered for clustering this run.
+  candidatesTruncated: boolean;
+  // Count of clusters that qualified (>= minClusterSize) but were left
+  // unconsolidated this run because MAX_CLUSTERS_PER_RUN was already hit -
+  // caps per-request Bedrock consolidateCluster calls (cost ceiling), not
+  // dropped forever: a later sleepScope run picks them up.
+  clustersSkipped: number;
 }
 
 // Calibrated against measured L2 distances between unit-normalized embeddings
@@ -31,8 +39,15 @@ export interface SleepScopeResult {
 // duplicates under real embeddings (cos >= 0.94) and consolidated nothing in
 // practice; 0.85 merges genuine paraphrases in both modes while keeping a
 // wide margin below the ~1.3 unrelated floor.
-const DEFAULT_SIMILARITY_THRESHOLD = 0.85;
+export const DEFAULT_SIMILARITY_THRESHOLD = 0.85;
 const DEFAULT_MIN_CLUSTER_SIZE = 2;
+// Cost ceiling for one /api/sleep call: caps the candidate SELECT (avoids an
+// unbounded scan across a scope's full episodic history) and the number of
+// clusters consolidated in one run (each cluster is one Bedrock
+// consolidateCluster call + one embed call - unbounded clusters-per-request
+// is an unbounded Bedrock spend per HTTP request on a public endpoint).
+const MAX_CANDIDATES = 500;
+const MAX_CLUSTERS_PER_RUN = 5;
 
 function l2(a: number[], b: number[]): number {
   return Math.sqrt(a.reduce((sum, v, i) => sum + (v - b[i]) ** 2, 0));
@@ -71,35 +86,41 @@ async function consolidateOneCluster(scopeId: string, cluster: Memory[]): Promis
   const mergedEmbedding = await embed(mergedContent);
   const newMemoryId = newUlid();
 
-  const client = await getPool().connect();
   try {
+    // pool.connect() lives INSIDE the retried closure (not acquired once
+    // outside it): a transient error can mean the connection itself is dead
+    // (ECONNRESET / "Connection terminated"), so a retry must get a fresh
+    // connection from the pool, not replay BEGIN on the same broken client.
     return await withTransientRetry(async () => {
-      await client.query("BEGIN");
+      const client = await getPool().connect();
       try {
-        await insertMemoryTx(client, {
-          scopeId,
-          memoryId: newMemoryId,
-          content: mergedContent,
-          embedding: mergedEmbedding,
-          layer: "semantic",
-          tags: [],
-          origin: "consolidation",
-        });
-        for (const source of cluster) {
-          await consolidateSourceTx(client, { scopeId, memoryId: source.memoryId, consolidatedInto: newMemoryId });
+        await client.query("BEGIN");
+        try {
+          await insertMemoryTx(client, {
+            scopeId,
+            memoryId: newMemoryId,
+            content: mergedContent,
+            embedding: mergedEmbedding,
+            layer: "semantic",
+            tags: [],
+            origin: "consolidation",
+          });
+          for (const source of cluster) {
+            await consolidateSourceTx(client, { scopeId, memoryId: source.memoryId, consolidatedInto: newMemoryId });
+          }
+          await client.query("COMMIT");
+          return newMemoryId;
+        } catch (err) {
+          await client.query("ROLLBACK").catch(() => {});
+          throw err;
         }
-        await client.query("COMMIT");
-        return newMemoryId;
-      } catch (err) {
-        await client.query("ROLLBACK").catch(() => {});
-        throw err;
+      } finally {
+        client.release();
       }
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`sleepScope: failed consolidating cluster for scope ${scopeId}: ${message}`);
-  } finally {
-    client.release();
   }
 }
 
@@ -120,11 +141,15 @@ export async function sleepScope(input: SleepScopeInput): Promise<SleepScopeResu
   const activeResult = await getPool().query<MemoryRow>(
     `SELECT ${MEMORY_COLUMNS} FROM memories
      WHERE scope_id = $1 AND status = 'active' AND layer = 'episodic'
-     ORDER BY created_at ASC`,
-    [scopeId]
+     ORDER BY created_at ASC
+     LIMIT $2`,
+    [scopeId, MAX_CANDIDATES]
   );
   const active = activeResult.rows.map(rowToMemory);
-  const clusters = clusterMemories(active, threshold).filter((cluster) => cluster.length >= minClusterSize);
+  const candidatesTruncated = active.length >= MAX_CANDIDATES;
+  const qualifyingClusters = clusterMemories(active, threshold).filter((cluster) => cluster.length >= minClusterSize);
+  const clusters = qualifyingClusters.slice(0, MAX_CLUSTERS_PER_RUN);
+  const clustersSkipped = qualifyingClusters.length - clusters.length;
 
   const created: string[] = [];
   let consolidated = 0;
@@ -133,5 +158,5 @@ export async function sleepScope(input: SleepScopeInput): Promise<SleepScopeResu
     consolidated += cluster.length;
   }
 
-  return { clusters: clusters.length, consolidated, created };
+  return { clusters: clusters.length, consolidated, created, candidatesTruncated, clustersSkipped };
 }

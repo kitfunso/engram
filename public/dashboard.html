@@ -657,7 +657,16 @@
 
   // ---- load orchestration ---------------------------------------------------
   function loadAll() {
-    state.scopeId = $("scope-input").value.trim();
+    var newScopeId = $("scope-input").value.trim();
+    if (newScopeId !== state.scopeId) {
+      // A chat session belongs to one scope (FK on scope_id + session_id) -
+      // carrying it over to a different scope makes the next /chat call
+      // 400 on session_id not found. Reset it, and the visible log with it,
+      // whenever the loaded scope actually changes.
+      state.sessionId = null;
+      clear($("chat-log"));
+    }
+    state.scopeId = newScopeId;
     state.selectedId = null;
     $("load-status").textContent = "";
     if (!state.scopeId) {

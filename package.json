@@ -26,7 +26,8 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "hono": "^4.6.0",
     "pg": "^8.13.0",
-    "ulid": "^3.0.2"
+    "ulid": "^3.0.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

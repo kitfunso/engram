@@ -1,6 +1,9 @@
 // Spike: verify CockroachDB Cloud connectivity E2E and create the engram database.
 // Reads the SQL password from a local file (never printed), writes .env, connects
 // with verify-full TLS using the downloaded CA cert, and reports version + latency.
+// Host and SQL user are never hardcoded here (public repo) - pass them via env vars.
+//
+// Usage: ENGRAM_CLOUD_HOST=<cluster-host> ENGRAM_CLOUD_USER=<sql-user> node cloud-conn-test.mjs <password-file>
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,14 +13,14 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "..", "..");
 
 const pwFile = process.argv[2];
-if (!pwFile || !fs.existsSync(pwFile)) {
-  console.error("usage: node cloud-conn-test.mjs <password-file>");
+const host = process.env.ENGRAM_CLOUD_HOST;
+const user = process.env.ENGRAM_CLOUD_USER;
+if (!pwFile || !fs.existsSync(pwFile) || !host || !user) {
+  console.error("usage: ENGRAM_CLOUD_HOST=<cluster-host> ENGRAM_CLOUD_USER=<sql-user> node cloud-conn-test.mjs <password-file>");
   process.exit(2);
 }
 const password = fs.readFileSync(pwFile, "ascii").trim();
-const host = "engram-31554.j77.aws-us-east-1.cockroachlabs.cloud";
 const port = 26257;
-const user = "keith";
 const caPath = path.join(process.env.APPDATA, "postgresql", "root.crt");
 
 const url = `postgresql://${user}:${encodeURIComponent(password)}@${host}:${port}/engram?sslmode=verify-full`;
