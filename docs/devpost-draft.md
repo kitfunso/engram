@@ -25,7 +25,7 @@ Also load-bearing: AS OF SYSTEM TIME (dual-layer time travel, gc.ttlseconds meas
 https://7ooxrsy3fga63z5f6dfadv2d3a0vtddf.lambda-url.us-east-1.on.aws/dashboard (scope: demo)
 
 ## Video
-<YOUTUBE_URL>
+https://youtu.be/DAe0tC_q62c
 
 ## Repo
 https://github.com/kitfunso/engram (MIT, public)
@@ -38,3 +38,7 @@ All code was newly written during the submission period. Engram's memory model f
 - AS OF SYSTEM TIME rejects bound parameters; the safe pattern is a regex-validated ISO literal, the single documented exception to parameterized-only SQL.
 - A vector index prefix must carry every equality filter: adding status='active' to the WHERE clause silently dropped the planner to a full scan until status joined the index prefix.
 - pg returns CockroachDB INT8 as strings; serverless GC windows (75 min) shape how far the fast time-travel path reaches.
+
+## Submitted
+
+2026-08-10: https://devpost.com/software/engram-e9m8i7 (video https://youtu.be/DAe0tC_q62c). Editable until the 2026-08-18 17:00 EDT deadline.
