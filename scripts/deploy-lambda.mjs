@@ -397,7 +397,9 @@ async function ensureFunctionUrl() {
 // concurrency when it differs from RESERVED_CONCURRENCY.
 async function ensureReservedConcurrency() {
   const get = aws(["lambda", "get-function-concurrency", "--function-name", FUNCTION_NAME, "--output", "json"]);
-  const current = get.ok ? JSON.parse(get.stdout).ReservedConcurrentExecutions : undefined;
+  // With no reservation configured the CLI prints an EMPTY body, not {} -
+  // guard before parsing (observed live 2026-08-10).
+  const current = get.ok && get.stdout.trim() ? JSON.parse(get.stdout).ReservedConcurrentExecutions : undefined;
   if (current === RESERVED_CONCURRENCY) {
     log(`reserved concurrency already set to ${RESERVED_CONCURRENCY}`);
     return { ok: true };
