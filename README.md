@@ -19,6 +19,8 @@ Built for the CockroachDB x AWS Build with Agentic Memory hackathon.
   ```
 - Runs on AWS Lambda + CockroachDB Cloud (serverless) + Amazon Bedrock (Titan V2 embeddings, Claude). Real-path recall p50 is ~240ms server-side, under the 300ms target (`scripts/spike/RESULTS-latency.md`).
 
+![Engram dashboard](docs/dashboard.png)
+
 ## Quickstart
 
 Requires Node 24+. From a clean clone:
