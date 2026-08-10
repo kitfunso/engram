@@ -22,7 +22,7 @@ Also load-bearing: AS OF SYSTEM TIME (dual-layer time travel, gc.ttlseconds meas
 - AWS Lambda: hosts the demo agent + dashboard behind a public Function URL.
 
 ## Demo URL
-<FUNCTION_URL>/dashboard (scope: demo)
+https://7ooxrsy3fga63z5f6dfadv2d3a0vtddf.lambda-url.us-east-1.on.aws/dashboard (scope: demo)
 
 ## Video
 <YOUTUBE_URL>

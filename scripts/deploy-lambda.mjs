@@ -355,6 +355,32 @@ async function ensureFunctionUrl() {
     }
   }
 
+  // Since Oct 2025, public NONE-auth Function URLs 403 unless the resource
+  // policy ALSO grants lambda:InvokeFunction to * (in addition to
+  // lambda:InvokeFunctionUrl above). AWS rejects --function-url-auth-type on
+  // this action, so the statement is unconditioned. Verified empirically:
+  // with only the InvokeFunctionUrl statement, every URL request returned
+  // 403; adding this statement made the same URL return 200.
+  const hasInvokeStatement = getPolicy.ok && getPolicy.stdout.includes("FunctionURLAllowPublicInvoke");
+  if (!hasInvokeStatement) {
+    log("adding public InvokeFunction permission (Oct 2025 requirement)...");
+    const addInvoke = aws([
+      "lambda",
+      "add-permission",
+      "--function-name",
+      FUNCTION_NAME,
+      "--action",
+      "lambda:InvokeFunction",
+      "--statement-id",
+      "FunctionURLAllowPublicInvoke",
+      "--principal",
+      "*",
+    ]);
+    if (!addInvoke.ok && !/ResourceConflictException/i.test(addInvoke.stderr)) {
+      return { ok: false, deniedReason: addInvoke.stderr };
+    }
+  }
+
   return { ok: true, functionUrl };
 }
 

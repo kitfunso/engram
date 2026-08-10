@@ -59,16 +59,29 @@ function buildExtractionPrompt(message: string, reply: string): BuiltPrompt {
     "there is nothing durable to remember, respond with exactly []. Only " +
     "extract new facts stated by the user in THIS exchange - never anything " +
     "from a recalled-memories block.";
+  // The exchange rides in ONE user message. Ending the list with an
+  // assistant turn makes Bedrock Converse treat it as a completed prefill
+  // and deterministically return empty content (verified against
+  // us.anthropic.claude-sonnet-4-5, 3/3 runs) - the conversation must end
+  // on a user turn for the model to produce a reply.
   const messages: ChatMessage[] = [
-    { role: "user", content: message },
-    { role: "assistant", content: reply },
+    {
+      role: "user",
+      content: `User message:\n${message}\n\nAssistant reply:\n${reply}\n\nNow respond with the JSON array.`,
+    },
   ];
   return { system, messages };
 }
 
 function parseFacts(raw: string): string[] {
+  // The model sometimes wraps the array in prose or ```json fences despite
+  // the ONLY-a-JSON-array instruction; parse the first [...] span rather
+  // than requiring the whole response to be bare JSON.
+  const start = raw.indexOf("[");
+  const end = raw.lastIndexOf("]");
+  if (start === -1 || end <= start) return [];
   try {
-    const parsed: unknown = JSON.parse(raw);
+    const parsed: unknown = JSON.parse(raw.slice(start, end + 1));
     if (!Array.isArray(parsed)) return [];
     return parsed.filter((f): f is string => typeof f === "string" && f.trim().length > 0);
   } catch {

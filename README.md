@@ -8,6 +8,17 @@ inside the GC window, and append-only `memory_versions` replay beyond it.
 
 Built for the CockroachDB x AWS Build with Agentic Memory hackathon.
 
+## Live demo
+
+- Dashboard: https://7ooxrsy3fga63z5f6dfadv2d3a0vtddf.lambda-url.us-east-1.on.aws/dashboard (enter scope `demo` and click Load)
+- Chat with the memory-backed agent:
+  ```
+  curl -X POST https://7ooxrsy3fga63z5f6dfadv2d3a0vtddf.lambda-url.us-east-1.on.aws/chat \
+    -H "content-type: application/json" \
+    -d '{"scope_id":"demo","message":"what is my dog called?"}'
+  ```
+- Runs on AWS Lambda + CockroachDB Cloud (serverless) + Amazon Bedrock (Titan V2 embeddings, Claude). Real-path recall p50 is ~240ms server-side, under the 300ms target (`scripts/spike/RESULTS-latency.md`).
+
 ## Quickstart
 
 Requires Node 24+. From a clean clone:
