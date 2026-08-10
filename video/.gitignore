@@ -1,0 +1,8 @@
+node_modules/
+renders/
+work/captures/
+work/still-*/
+work/vo/
+assets/cap-*.mp4
+assets/*.wav
+.hyperframes/

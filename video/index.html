@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="assets/vendor/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        margin: 0; width: 1920px; height: 1080px; overflow: hidden;
+        background: #0b0e14;
+      }
+      body { font-family: "Segoe UI", "Inter", system-ui, sans-serif; color: #e6e6e6; }
+      .mono, code, pre { font-family: Consolas, "JetBrains Mono", monospace; }
+      .scene { position: absolute; inset: 0; background: #0b0e14; }
+      .green { color: #4ade80; }
+      .amber { color: #fbbf24; }
+      .dim { color: #8b93a7; }
+      .cap-video { position: absolute; inset: 0; width: 1920px; height: 1080px; object-fit: cover; background: #0b0e14; }
+      .lower-third {
+        position: absolute; left: 48px; bottom: 44px;
+        background: rgba(11, 14, 20, 0.92); border: 1px solid #1f2430; border-left: 3px solid #4ade80;
+        padding: 14px 22px; font-size: 26px; letter-spacing: 0.2px;
+      }
+      .lower-third .k { color: #4ade80; font-weight: 600; margin-right: 10px; }
+      .tag {
+        display: inline-block; border: 1px solid #1f2430; padding: 8px 16px;
+        font-size: 24px; color: #8b93a7; background: #0e1220; margin-right: 14px;
+      }
+      /* scene 1 */
+      #s1 .forget { position: absolute; left: 160px; top: 380px; font-size: 110px; font-weight: 700; letter-spacing: -2px; }
+      #s1 .forget .sub { display: block; font-size: 34px; font-weight: 400; color: #8b93a7; margin-top: 26px; letter-spacing: 0; line-height: 1.5; }
+      #s1 .brand { position: absolute; left: 160px; top: 340px; }
+      #s1 .brand h1 { font-size: 150px; font-weight: 800; color: #4ade80; letter-spacing: 2px; }
+      #s1 .brand p { font-size: 38px; color: #e6e6e6; margin-top: 18px; max-width: 1300px; line-height: 1.45; }
+      #s1 .stack { position: absolute; left: 160px; bottom: 140px; }
+      /* scene 5 terminal */
+      #s5 .term {
+        position: absolute; left: 140px; top: 120px; right: 140px; bottom: 120px;
+        background: #0a0c12; border: 1px solid #1f2430; padding: 34px 40px;
+        font-size: 25px; line-height: 1.62;
+      }
+      #s5 .term .line { opacity: 0; }
+      #s5 .phase { color: #4ade80; font-weight: 700; margin-top: 10px; }
+      #s5 .ok { color: #e6e6e6; }
+      #s5 .ok b { color: #4ade80; font-weight: 600; }
+      #s5 .stall { color: #fbbf24; }
+      #s5 .label {
+        position: absolute; right: 150px; top: 88px; background: #1a1408;
+        border: 1px solid #fbbf24; color: #fbbf24; padding: 8px 18px; font-size: 22px; z-index: 2;
+      }
+      /* scene 6 architecture */
+      #s6 h2 { position: absolute; left: 120px; top: 90px; font-size: 54px; font-weight: 700; }
+      #s6 .cols { position: absolute; left: 120px; right: 120px; top: 200px; display: flex; gap: 36px; }
+      #s6 .col { flex: 1; border: 1px solid #1f2430; background: #0e1220; padding: 28px 30px; min-height: 640px; }
+      #s6 .col h3 { font-size: 32px; margin-bottom: 22px; padding-bottom: 14px; border-bottom: 1px solid #1f2430; }
+      #s6 .item { font-size: 26px; margin: 16px 0; line-height: 1.4; opacity: 0; }
+      #s6 .item .t { color: #4ade80; font-weight: 600; }
+      #s6 pre { font-size: 19px; color: #8b93a7; background: #0a0c12; border: 1px solid #1f2430; padding: 14px; margin-top: 18px; line-height: 1.5; opacity: 0; }
+      #s6 pre b { color: #4ade80; font-weight: 600; }
+      #s6 .foot { position: absolute; left: 120px; bottom: 70px; font-size: 26px; color: #8b93a7; opacity: 0; }
+      /* scene 7 close */
+      #s7 .wrap { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+      #s7 h1 { font-size: 130px; font-weight: 800; color: #4ade80; letter-spacing: 2px; }
+      #s7 p { font-size: 40px; margin-top: 26px; max-width: 1400px; line-height: 1.5; }
+      #s7 .links { margin-top: 56px; font-size: 32px; color: #8b93a7; line-height: 1.8; }
+      #s7 .links b { color: #e6e6e6; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="147.5" data-width="1920" data-height="1080">
+
+      <!-- scene 1: problem + title (0 - 22.0, logical end 21.5, 0.5s fade tail) -->
+      <div id="s1" class="scene clip" data-start="0" data-duration="22" data-track-index="1">
+        <div class="forget" id="s1-forget">Agents forget.
+          <span class="sub">Every session starts from zero. Memory is a bolted-on vector store<br />with no idea how memories should age, merge, or be audited.</span>
+        </div>
+        <div class="brand" id="s1-brand" style="opacity: 0">
+          <h1>ENGRAM</h1>
+          <p>A memory engine built natively on CockroachDB, with Amazon Bedrock doing the thinking. Memories decay, consolidate, and answer for themselves.</p>
+        </div>
+        <div class="stack" id="s1-stack" style="opacity: 0">
+          <span class="tag mono">CockroachDB vector indexing</span>
+          <span class="tag mono">AS OF SYSTEM TIME</span>
+          <span class="tag mono">Amazon Bedrock</span>
+          <span class="tag mono">AWS Lambda</span>
+        </div>
+      </div>
+
+      <!-- scene 2: cross-session demo capture (21.5 - 45.5) -->
+      <video id="cap-a" class="clip cap-video" src="assets/cap-a.mp4" data-start="21.5" data-duration="24" data-track-index="2" muted playsinline></video>
+      <div id="o2" class="lower-third clip" data-start="22.5" data-duration="22" data-track-index="3">
+        <span class="k">LIVE</span>demo agent on AWS Lambda <span class="dim mono">/chat -&gt; recall -&gt; remember</span>
+      </div>
+
+      <!-- scene 3: lifecycle capture (45.5 - 72.0) -->
+      <video id="cap-b" class="clip cap-video" src="assets/cap-b.mp4" data-start="45.5" data-duration="26.5" data-track-index="4" muted playsinline></video>
+      <div id="o3" class="lower-third clip" data-start="46.5" data-duration="24.5" data-track-index="5">
+        <span class="k">LIFECYCLE</span>decay curves, consolidation lineage, append-only versions
+      </div>
+
+      <!-- scene 4: time travel capture (72.0 - 92.0) -->
+      <video id="cap-c" class="clip cap-video" src="assets/cap-c.mp4" data-start="72" data-duration="20" data-track-index="6" muted playsinline></video>
+      <div id="o4" class="lower-third clip" data-start="73" data-duration="18" data-track-index="7">
+        <span class="k">TIME TRAVEL</span><span class="mono">AS OF SYSTEM TIME</span>&nbsp;in the GC window, versions replay beyond it
+      </div>
+
+      <!-- scene 5: resilience terminal replay (91.5 - 110.0, logical end 109.5) -->
+      <div id="s5" class="scene clip" data-start="91.5" data-duration="18.5" data-track-index="8" style="opacity: 0">
+        <div class="label mono">local 3-node cluster (output replay)</div>
+        <div class="term mono">
+          <div class="line phase">PHASE 1: baseline - 3-node cluster up, all replicas live</div>
+          <div class="line ok">[23:28:43] remember #1&nbsp;&nbsp;<b>OK</b>&nbsp;&nbsp;64ms&nbsp;&nbsp;&nbsp;recall #1&nbsp;&nbsp;<b>OK</b>&nbsp;&nbsp;18ms</div>
+          <div class="line phase">PHASE 2: Stop-Process node3 -&gt; 2/3 nodes up, Raft quorum HELD</div>
+          <div class="line ok">[23:28:48] remember #10&nbsp;<b>OK</b>&nbsp;&nbsp;11ms&nbsp;&nbsp;... uninterrupted through #24, all OK</div>
+          <div class="line phase">PHASE 3: Stop-Process node2 -&gt; 1/3 nodes up, Raft quorum LOST</div>
+          <div class="line stall">[23:29:00] remember #25&nbsp;FAILED&nbsp;3015ms&nbsp;&nbsp;stalled (quorum lost, 3000ms timeout)</div>
+          <div class="line stall">[23:29:03] recall&nbsp;&nbsp;&nbsp;#25&nbsp;FAILED&nbsp;3003ms&nbsp;&nbsp;stalled (quorum lost, 3000ms timeout)</div>
+          <div class="line phase">PHASE 4: restart node2 + node3 -&gt; quorum restored, recovery</div>
+          <div class="line ok">[23:29:10] remember #27&nbsp;<b>OK</b>&nbsp;&nbsp;13ms&nbsp;&nbsp;... steady OK through #37</div>
+          <div class="line ok">final node status: <b>3/3 nodes is_live=true</b></div>
+        </div>
+      </div>
+
+      <!-- scene 6: architecture (109.0 - 138.0, logical end 137.5) -->
+      <div id="s6" class="scene clip" data-start="109" data-duration="29" data-track-index="9" style="opacity: 0">
+        <h2>Under the hood</h2>
+        <div class="cols">
+          <div class="col">
+            <h3 class="green">CockroachDB</h3>
+            <div class="item"><span class="t">Distributed vector indexing</span><br />scoped ANN recall on a prefix-filtered index</div>
+            <pre>vector search
+  table: memories@memories_scope_
+         status_embedding_idx
+  <b>prefix spans: [/scope/'active']</b></pre>
+            <div class="item"><span class="t">Cloud managed MCP server</span><br />any agent introspects the cluster</div>
+            <div class="item"><span class="t">AS OF SYSTEM TIME</span><br />+ append-only versions = time travel</div>
+          </div>
+          <div class="col">
+            <h3 class="green">Amazon Bedrock + Lambda</h3>
+            <div class="item"><span class="t">Titan Text Embeddings V2</span><br />1024-dim, unit-normalized</div>
+            <div class="item"><span class="t">Claude</span><br />replies, fact extraction, consolidation merges</div>
+            <div class="item"><span class="t">AWS Lambda</span><br />public Function URL demo, recall p50 ~240ms</div>
+          </div>
+          <div class="col">
+            <h3 class="green">Engram</h3>
+            <div class="item"><span class="t">MCP server</span><br />remember, recall, recall_asof, reflect, introspect</div>
+            <div class="item"><span class="t">Open source, MIT</span><br />58 real-database tests</div>
+            <div class="item"><span class="t">Built new for this hackathon</span><br />design follows hippo (same author), zero code copied</div>
+          </div>
+        </div>
+        <div class="foot mono">github.com/kitfunso/engram</div>
+      </div>
+
+      <!-- scene 7: close (137.5 - 147.5) -->
+      <div id="s7" class="scene clip" data-start="137.5" data-duration="10" data-track-index="10" style="opacity: 0">
+        <div class="wrap">
+          <h1>ENGRAM</h1>
+          <p>Give your agents a memory that ages, consolidates,<br />and answers for itself.</p>
+          <div class="links mono">
+            <b>github.com/kitfunso/engram</b><br />
+            live demo + dashboard linked on Devpost
+          </div>
+        </div>
+      </div>
+
+      <!-- voiceover -->
+      <audio id="vo1" src="assets/01-problem.wav" data-start="0.3" data-duration="20.1" data-track-index="20" data-volume="1"></audio>
+      <audio id="vo2" src="assets/02-cross-session.wav" data-start="22" data-duration="22.5" data-track-index="21" data-volume="1"></audio>
+      <audio id="vo3" src="assets/03-lifecycle.wav" data-start="46" data-duration="24.8" data-track-index="22" data-volume="1"></audio>
+      <audio id="vo4" src="assets/04-timetravel.wav" data-start="72.5" data-duration="18.5" data-track-index="23" data-volume="1"></audio>
+      <audio id="vo5" src="assets/05-resilience.wav" data-start="92.3" data-duration="15.9" data-track-index="24" data-volume="1"></audio>
+      <audio id="vo6" src="assets/06-architecture.wav" data-start="110" data-duration="26.4" data-track-index="25" data-volume="1"></audio>
+      <audio id="vo7" src="assets/07-close.wav" data-start="138.3" data-duration="8.3" data-track-index="26" data-volume="1"></audio>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+      window.__timelines["main"] = tl;
+
+      // scene 1 (global 0 - 22); x/scale/opacity only, no y transforms
+      // (HyperFrames 0.7.x drawelement capture bug: y/yPercent do not composite)
+      tl.fromTo("#s1-forget", { opacity: 0, x: -60 }, { opacity: 1, x: 0, duration: 0.9, ease: "power2.out" }, 0.4);
+      tl.to("#s1-forget", { opacity: 0, x: 40, duration: 0.6, ease: "power2.in" }, 6.2);
+      tl.set("#s1-forget", { opacity: 0 }, 6.9);
+      tl.fromTo("#s1-brand", { opacity: 0, scale: 0.96 }, { opacity: 1, scale: 1, duration: 0.9, ease: "power2.out" }, 7.0);
+      tl.fromTo("#s1-stack", { opacity: 0, x: -40 }, { opacity: 1, x: 0, duration: 0.7, ease: "power2.out" }, 13.5);
+      tl.to("#s1", { opacity: 0, duration: 0.5, ease: "none" }, 21.5);
+      tl.set("#s1", { opacity: 0 }, 22.0);
+
+      // lower-thirds on the capture scenes slide in from the left
+      for (const [id, at] of [["#o2", 22.5], ["#o3", 46.5], ["#o4", 73.0]]) {
+        tl.fromTo(id, { opacity: 0, x: -50 }, { opacity: 1, x: 0, duration: 0.6, ease: "power2.out" }, at + 0.05);
+      }
+
+      // scene 5 terminal: fades in over cap-c's cloned tail, lines land in run rhythm
+      tl.fromTo("#s5", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "none" }, 91.5);
+      const lineTimes = [92.6, 93.6, 95.2, 96.2, 98.4, 99.6, 100.6, 102.6, 104.0, 105.4];
+      document.querySelectorAll("#s5 .line").forEach((el, i) => {
+        tl.fromTo(el, { opacity: 0, x: -14 }, { opacity: 1, x: 0, duration: 0.28, ease: "power1.out" }, lineTimes[i] ?? 105.4);
+      });
+      tl.to("#s5", { opacity: 0, duration: 0.5, ease: "none" }, 109.0);
+      tl.set("#s5", { opacity: 0 }, 109.5);
+
+      // scene 6 architecture: column items pop staggered, one column at a time
+      tl.fromTo("#s6", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "none" }, 109.0);
+      document.querySelectorAll("#s6 .col").forEach((col, c) => {
+        col.querySelectorAll(".item, pre").forEach((el, i) => {
+          tl.fromTo(el, { opacity: 0, x: -18 }, { opacity: 1, x: 0, duration: 0.45, ease: "power2.out" }, 110.4 + c * 4.6 + i * 1.15);
+        });
+      });
+      tl.fromTo("#s6 .foot", { opacity: 0 }, { opacity: 1, duration: 0.5 }, 128.0);
+      tl.to("#s6", { opacity: 0, duration: 0.5, ease: "none" }, 137.5);
+      tl.set("#s6", { opacity: 0 }, 138.0);
+
+      // scene 7 close
+      tl.fromTo("#s7", { opacity: 0 }, { opacity: 1, duration: 0.6, ease: "none" }, 137.5);
+      tl.fromTo("#s7 h1", { scale: 0.94 }, { scale: 1, duration: 1.0, ease: "power2.out" }, 137.6);
+      tl.fromTo("#s7 .links", { opacity: 0 }, { opacity: 1, duration: 0.6 }, 139.6);
+    </script>
+  </body>
+</html>
