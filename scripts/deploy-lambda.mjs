@@ -413,7 +413,18 @@ async function ensureReservedConcurrency() {
     "--reserved-concurrent-executions",
     String(RESERVED_CONCURRENCY),
   ]);
-  if (!put.ok) return { ok: false, deniedReason: put.stderr };
+  if (!put.ok) {
+    // Small accounts: AWS requires >= 10 UNRESERVED executions account-wide,
+    // so on an account whose total concurrency limit is already ~10 the
+    // reservation is impossible - and unnecessary: the account-wide cap is
+    // itself a tighter ceiling than the one we tried to set (observed live
+    // 2026-08-10). Warn and continue rather than failing the deploy.
+    if (/UnreservedConcurrentExecution below its minimum/i.test(put.stderr)) {
+      log("reserved concurrency unavailable (account total limit is already at AWS minimum - itself the cost ceiling); continuing");
+      return { ok: true };
+    }
+    return { ok: false, deniedReason: put.stderr };
+  }
   return { ok: true };
 }
 
